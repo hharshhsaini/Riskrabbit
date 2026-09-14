@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     MODEL_PATH: str = "ml/model.json"
     DEFAULT_USER_EMAIL: str = "dev@example.com"
     ENV: str = "development"
+    # Comma-separated; production adds the frontend's URL, e.g. https://riskrabbit.vercel.app
+    CORS_ORIGINS: str = "http://localhost:5173"
 
 
 settings = Settings()

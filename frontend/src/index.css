@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@layer base {
+  /* The app has no dark theme yet. Without this, a browser in dark mode gives
+     the page a dark background while components use dark text. */
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+}

@@ -67,6 +67,17 @@ def get_repository(db: Session, repository_id: uuid.UUID) -> Repository:
     return repository
 
 
+def get_pull_request(db: Session, pull_request_id: uuid.UUID) -> PullRequest:
+    pull_request = db.scalars(
+        select(PullRequest)
+        .join(Repository, PullRequest.repository_id == Repository.id)
+        .where(PullRequest.id == pull_request_id, Repository.user_id == get_default_user(db).id)
+    ).one_or_none()
+    if pull_request is None:
+        raise NotFoundError("Pull request not found")
+    return pull_request
+
+
 def count_prior_merged_prs(
     db: Session, repository_id: uuid.UUID, author: str | None, before: Any
 ) -> int:
@@ -92,9 +103,16 @@ def sync_pull_requests(db: Session, repository_id: uuid.UUID) -> list[PullReques
     """Fetch recent PRs from GitHub, upsert them, and return the repository's stored PRs."""
     repository = get_repository(db, repository_id)
 
-    pulls = github.list_pull_requests(
-        repository.owner, repository.name, state="all", limit=PR_SYNC_LIMIT
-    )
+    try:
+        pulls = github.list_pull_requests(
+            repository.owner, repository.name, state="all", limit=PR_SYNC_LIMIT
+        )
+    except GitHubAPIError as exc:
+        if exc.status == 404:
+            raise NotFoundError(
+                f"Repository {repository.owner}/{repository.name} no longer exists on GitHub or is no longer public"
+            ) from exc
+        raise
     # Keyed by number: Postgres rejects an upsert that touches the same row twice,
     # which can happen if a PR is opened while pages are being fetched.
     rows = {p["number"]: _pull_request_row(repository.id, p) for p in pulls}

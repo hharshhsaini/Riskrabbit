@@ -18,11 +18,15 @@ def average_pr():
 
 def risky_pr():
     values = average_pr()
-    values.update(files_changed=50, total_churn=2475, lines_added=1980, is_weekend=1, touches_config=1, has_tests=0)
+    values.update(files_changed=50, total_churn=2475, lines_added=1980, is_weekend=1, touches_config=0, has_tests=0)
     return values
 
 
-def fake_client(content="This PR is moderately elevated risk because it changes 50 files.", finish_reason="stop", calls=None):
+def controlled_effects(monkeypatch, **effects):
+    monkeypatch.setattr(explain.model, "contributions", lambda values: {name: effects.get(name, 0.0) for name in FEATURE_ORDER})
+
+
+def fake_client(content="Moderately elevated: 50 files changed raised the score.", finish_reason="stop", calls=None):
     def create(**kwargs):
         if calls is not None:
             calls.append(kwargs)
@@ -39,35 +43,56 @@ def raising_client(exc):
 
 
 def test_every_feature_has_readable_text_and_a_training_mean():
-    assert set(explain.FEATURE_TEXT) == set(FEATURE_ORDER)
+    assert set(explain.VALUE_TEXT) | set(explain.FLAG_TEXT) == set(FEATURE_ORDER)
+    assert not set(explain.VALUE_TEXT) & set(explain.FLAG_TEXT)
     assert list(explain.FEATURE_MEANS) == FEATURE_ORDER
 
 
-def test_top_deviations_picks_five_furthest_from_mean_relative_to_mean():
-    drivers = explain.top_deviations(risky_pr())
+def test_top_drivers_rank_by_size_of_effect_and_skip_unused_features(monkeypatch):
+    controlled_effects(monkeypatch, files_changed=0.9, has_tests=-1.2, is_weekend=0.3, lines_added=1e-9)
 
-    assert len(drivers) == 5
-    assert drivers[0]["name"] == "files_changed"
-    assert {"total_churn", "lines_added", "is_weekend"} <= {d["name"] for d in drivers}
-    assert all(d["name"] not in {"commit_count", "review_comment_count"} for d in drivers)
-    assert [d["deviation"] for d in drivers] == sorted((d["deviation"] for d in drivers), reverse=True)
+    drivers = explain.top_drivers(risky_pr())
+
+    assert [d["name"] for d in drivers] == ["has_tests", "files_changed", "is_weekend"]
+    assert [d["effect"] for d in drivers] == [-1.2, 0.9, 0.3]
 
 
-def test_prompt_contains_score_label_five_features_and_instructions():
-    prompt = explain.build_prompt(explain.top_deviations(risky_pr()), 0.55, "Medium")
+def test_top_drivers_on_the_real_model_are_sorted_and_at_most_five():
+    drivers = explain.top_drivers(risky_pr())
+
+    assert 1 <= len(drivers) <= 5
+    assert [abs(d["effect"]) for d in drivers] == sorted((abs(d["effect"]) for d in drivers), reverse=True)
+
+
+def test_prompt_marks_direction_and_phrases_flags_as_the_prs_actual_state(monkeypatch):
+    controlled_effects(monkeypatch, files_changed=0.9, touches_config=-0.4, is_weekend=0.2)
+    means = dict(explain.FEATURE_MEANS, touches_config=0.18, is_weekend=0.26, files_changed=5.7)
+    monkeypatch.setattr(explain, "FEATURE_MEANS", means)
+
+    prompt = explain.build_prompt(explain.top_drivers(risky_pr()), 0.55, "Medium")
+
+    assert "1. files changed: 50 (average 5.7); raised the score" in prompt
+    assert "2. does not change configuration files, like 82% of pull requests; lowered the score" in prompt
+    assert "3. was merged on a weekend, like 26% of pull requests; raised the score" in prompt
+    assert "\n4. " not in prompt
+
+
+def test_prompt_contains_score_label_and_instructions():
+    prompt = explain.build_prompt(explain.top_drivers(risky_pr()), 0.55, "Medium")
 
     assert "0.55" in prompt and "Medium" in prompt
-    assert prompt.count("\n- ") == 5
-    assert "files changed: 50 (average" in prompt
     assert "engineer explaining" in prompt
+    assert "moved this score the most, according to the model itself" in prompt
+    assert "measurement 1 had the largest effect" in prompt
+    assert "Discuss only the first 2 or 3 measurements in the list, in that order" in prompt
+    assert "do not rank the measurements differently" in prompt
+    assert "do not mention measurements that are not listed" in prompt
     assert "2 to 4 sentences" in prompt
-    assert "2 or 3 measurements" in prompt
-    assert "Use only the numbers above" in prompt
-    assert "do not invent facts" in prompt
+    assert "copy their numbers exactly" in prompt
+    assert "do not guess how well the change was reviewed or tested" in prompt
+    assert "what the model has seen before" in prompt
     assert '"moderately elevated", not "dangerous"' in prompt
     assert "Do not use bullet points" in prompt
-    for name in ("review_comment_count", "commit_count"):
-        assert explain.FEATURE_TEXT[name][0] + ":" not in prompt
 
 
 def test_successful_call_uses_the_prompt_settings(monkeypatch):
@@ -77,7 +102,7 @@ def test_successful_call_uses_the_prompt_settings(monkeypatch):
 
     text = explain.generate_explanation(risky_pr(), 0.62, "Medium")
 
-    assert text == "This PR is moderately elevated risk because it changes 50 files."
+    assert text == "Moderately elevated: 50 files changed raised the score."
     (call,) = calls
     assert call["temperature"] == 0.3
     assert call["max_tokens"] == 200
@@ -113,9 +138,9 @@ def test_any_llm_failure_returns_the_fallback_and_logs_a_warning(monkeypatch, ca
     with caplog.at_level(logging.WARNING, logger="services.explain"):
         text = explain.generate_explanation(risky_pr(), 0.71, "High")
 
-    assert text == explain.fallback_explanation(explain.top_deviations(risky_pr()), 0.71, "High")
+    assert text == explain.fallback_explanation(explain.top_drivers(risky_pr()), 0.71, "High")
     assert "rated High risk (score 0.71)" in text
-    assert "files changed: 50" in text
+    assert "moved the score most" in text
     assert "LLM explanation failed" in caplog.text
     assert config.settings.OPENAI_API_KEY not in caplog.text
 
@@ -129,6 +154,18 @@ def test_client_construction_failure_also_falls_back(monkeypatch):
     assert explain.generate_explanation(risky_pr(), 0.2, "Low").startswith("This pull request is rated Low risk")
 
 
+def test_contribution_failure_falls_back_without_calling_the_llm(monkeypatch):
+    def broken(values):
+        raise ValueError("booster unavailable")
+
+    calls = []
+    monkeypatch.setattr(explain.model, "contributions", broken)
+    monkeypatch.setattr(explain, "_client", lambda: fake_client(calls=calls))
+
+    assert explain.generate_explanation(risky_pr(), 0.3, "Low") == "This pull request is rated Low risk (score 0.30)."
+    assert calls == []
+
+
 @pytest.mark.parametrize(("content", "finish_reason"), [(None, "length"), ("", "stop"), ("   ", "stop"), ("This PR changes 50 fi", "length")])
 def test_empty_or_truncated_replies_fall_back(monkeypatch, content, finish_reason):
     monkeypatch.setattr(explain, "_client", lambda: fake_client(content=content, finish_reason=finish_reason))
@@ -136,10 +173,7 @@ def test_empty_or_truncated_replies_fall_back(monkeypatch, content, finish_reaso
     assert explain.generate_explanation(risky_pr(), 0.5, "Medium").startswith("This pull request is rated Medium risk")
 
 
-def test_fallback_is_deterministic_and_describes_flags_in_words():
-    drivers = explain.top_deviations(risky_pr())
+def test_fallback_is_deterministic():
+    drivers = explain.top_drivers(risky_pr())
 
-    first = explain.fallback_explanation(drivers, 0.66, "Medium")
-
-    assert first == explain.fallback_explanation(drivers, 0.66, "Medium")
-    assert "merged on a weekend: yes (true for" in explain.build_prompt(drivers, 0.66, "Medium")
+    assert explain.fallback_explanation(drivers, 0.66, "Medium") == explain.fallback_explanation(drivers, 0.66, "Medium")

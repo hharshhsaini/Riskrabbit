@@ -7,6 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 REPO_SEGMENT_PATTERN = r"^[A-Za-z0-9._-]+$"
 
 
+class HealthOut(BaseModel):
+    status: str
+
+
+class ErrorOut(BaseModel):
+    detail: str
+
+
 class RepositoryCreate(BaseModel):
     owner: str = Field(min_length=1, max_length=100, pattern=REPO_SEGMENT_PATTERN)
     name: str = Field(min_length=1, max_length=100, pattern=REPO_SEGMENT_PATTERN)
@@ -32,6 +40,10 @@ class PullRequestOut(BaseModel):
     state: str | None
     opened_at: datetime | None
     merged_at: datetime | None
+
+
+class PullRequestDetailOut(PullRequestOut):
+    repository: RepositoryOut
 
 
 class PredictionCreate(BaseModel):

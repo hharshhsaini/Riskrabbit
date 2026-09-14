@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import xgboost as xgb
 from xgboost import XGBClassifier
 
 import features
@@ -22,9 +23,22 @@ MEDIUM_RISK_BELOW = 0.67
 
 
 def predict(feature_dict: dict[str, float]) -> tuple[float, str]:
-    row = pd.DataFrame([features.to_array(feature_dict)], columns=FEATURE_ORDER)
-    score = float(classifier.predict_proba(row)[0, 1])
+    score = float(classifier.predict_proba(_row(feature_dict))[0, 1])
     return score, score_to_label(score)
+
+
+def contributions(feature_dict: dict[str, float]) -> dict[str, float]:
+    """How much each feature pushed this PR's score up (+) or down (-).
+
+    XGBoost's built-in tree SHAP values, in log-odds. Together with the model's base
+    value they add up exactly to this PR's score before the sigmoid.
+    """
+    values = classifier.get_booster().predict(xgb.DMatrix(_row(feature_dict)), pred_contribs=True)[0]
+    return {name: float(value) for name, value in zip(FEATURE_ORDER, values[:-1])}
+
+
+def _row(feature_dict: dict[str, float]) -> pd.DataFrame:
+    return pd.DataFrame([features.to_array(feature_dict)], columns=FEATURE_ORDER)
 
 
 def score_to_label(score: float) -> str:

@@ -140,9 +140,12 @@ def _json(response: requests.Response) -> Any:
 
 def _error_message(response: requests.Response) -> str:
     try:
-        return response.json().get("message") or response.reason
+        body = response.json()
     except ValueError:
-        return response.reason or "no error message"
+        body = None
+    # An error body is normally {"message": ...}, but a proxy can send any JSON.
+    message = body.get("message") if isinstance(body, dict) else None
+    return message or response.reason or "no error message"
 
 
 def _seconds(value: str | None) -> float | None:

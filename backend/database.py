@@ -26,6 +26,15 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def seed_default_user(db: Session) -> None:
+    """Create the user named by DEFAULT_USER_EMAIL if it does not exist yet."""
+    from models import User
+
+    if db.execute(select(User.id).where(User.email == settings.DEFAULT_USER_EMAIL)).first() is None:
+        db.add(User(email=settings.DEFAULT_USER_EMAIL))
+        db.commit()
+
+
 def get_default_user(db: Session) -> "User":
     """Return the single seeded user. Raises if startup seeding has not run."""
     from models import User

@@ -100,6 +100,21 @@ def test_predict_returns_float_probability_and_label(model_module):
     assert label == model_module.score_to_label(score)
 
 
+def test_contributions_are_per_feature_and_add_up_to_the_score(model_module):
+    import math
+
+    import xgboost as xgb
+
+    vector = obviously_risky()
+    effects = model_module.contributions(vector)
+    row = pd.DataFrame([[vector[n] for n in FEATURE_ORDER]], columns=FEATURE_ORDER)
+    full = model_module.classifier.get_booster().predict(xgb.DMatrix(row), pred_contribs=True)[0]
+
+    assert list(effects) == FEATURE_ORDER
+    assert effects["files_changed"] > 0
+    assert math.isclose(1 / (1 + math.exp(-float(full.sum()))), model_module.predict(vector)[0], rel_tol=1e-5)
+
+
 def test_predict_never_reloads_the_model(model_module, monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("model.json was reloaded during predict()")

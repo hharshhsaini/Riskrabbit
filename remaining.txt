@@ -1,6 +1,6 @@
 REMAINING — Predictive Deployment Risk Assessment System
 Running list of everything deferred. Nothing here is forgotten; it is parked.
-Last updated: 2026-09-14, Step 15 (services/explain.py) done; D0u resolved
+Last updated: 2026-09-14, Step 22 (frontend polish pass) done
 
 ================================================================
 A. BLOCKED ON YOU — needed before the next steps can run
@@ -141,7 +141,447 @@ B. OPEN GATES — steps done in code but not yet fully verified
         ml/data/rerun_after_backport_fix.txt. DO NOT COMMIT the 11:58 artifacts.
         NOTE: 3.5% is now BELOW the Step 10 gate's 5% floor.
 
+[~] B19. Step 25 deploy — REPO PREPARED AND VERIFIED LOCALLY (2026-09-14); the live
+        deploy needs your accounts, dashboards and a push.
+        1. Neon: DATABASE_URL is the POOLED host (-pooler), sslmode=require, reachable.
+        2. Backend prep:
+           - backend/Procfile added; backend/.python-version = 3.13 (the venv's version).
+           - requirements.txt pinned from pip freeze (50 packages). Verified: installs
+             into a FRESH venv, `pip check` clean, and the Procfile command boots it
+             on $PORT with /health 200 and a Neon read 200. (macOS only — Docker was
+             not running, so a Linux build is unverified. On Linux, xgboost also
+             downloads nvidia-nccl-cu12, ~300 MB; `xgboost-cpu` avoids it if the
+             image is too big.)
+           - model.json, feature_order.json, metrics.json: committed, not ignored,
+             unchanged since commit.
+           - CORS: now from CORS_ORIGINS env (comma-separated, trailing "/" stripped),
+             default http://localhost:5173. Verified live: the configured origin is
+             allowed and any other is refused. Added to .env.example.
+           - FIXED a deploy trap: startup seeded the default user only when the users
+             table was EMPTY, so a DEFAULT_USER_EMAIL on Railway that differed from
+             the one already in Neon would make every route 500. Now it seeds by email
+             (database.seed_default_user).
+        3. Frontend prep: frontend/vercel.json rewrite for deep links; api.js strips a
+           trailing "/" from VITE_API_URL. Lint clean, build OK.
+        Tests: 197 pass (+test_deploy.py).
+        ENV VARS THE PLAYBOOK LIST MISSES (without these the deploy half-works):
+           - OPENAI_BASE_URL=https://api.groq.com/openai/v1 — otherwise the Groq key is
+             sent to OpenAI, fails, and EVERY explanation silently uses the fallback.
+           - CORS_ORIGINS=<your Vercel URL> — otherwise the browser blocks every call.
+           - DEFAULT_USER_EMAIL must equal backend/.env's value, or the live app starts
+             with an empty repository list (same Neon database).
+        STILL TO DO: commit + push, Railway service, Vercel project, set CORS_ORIGINS,
+        then live /health and one full prediction.
+
+[x] B18. Step 24 hardening DONE (2026-09-14). 192 backend tests pass (was 158;
+        +test_hardening.py). Offline subset: 163 tests, 2.9 s, sockets blocked.
+        1. 404s: unknown UUIDs already gave 404 on all 5 id routes. FIXED two gaps:
+           - malformed path id (/pull-requests/abc) gave a raw 422 pydantic list;
+             now 404 "Pull request not found"/"Repository not found". Body ids
+             (POST /predictions {"pull_request_id":"abc"}) stay 422, correctly.
+           - GET /repositories/{id}/pull-requests for a repo deleted on GitHub gave
+             502; now 404 "Repository owner/name no longer exists on GitHub…".
+        2. Every `except` checked. requests: all caught in github._request/_json.
+           openai: explain.py catches everything and falls back. FIXED: github
+           _error_message crashed (AttributeError) on a JSON error body that is not
+           an object, e.g. from a proxy; now falls back to the HTTP reason.
+           NOT CHANGED: DB errors outside the pipeline's save (e.g. Neon down) reach
+           the generic 500 handler as "Internal server error" — acceptable.
+        3. FIXED: logging was never configured, so every services.* INFO line
+           (incl. the pipeline timings) was silently dropped under uvicorn. Now one
+           basicConfig in main.py, INFO, "%(asctime)s %(levelname)s %(name)s: …";
+           uvicorn's own lines go through it too. Verified on a live server.
+        4. /docs: added HealthOut + ErrorOut; 404/502/500 documented per route;
+           removed the 422 FastAPI listed on path-only routes (can't happen now).
+           Tests pin every route's body model and error codes.
+        5. OK, no change: .env ignored (root .gitignore), never in git history;
+           .env.example has all 9 keys config.py reads; frontend .env.example too.
+        6. OK, no change: no real token in repo files or history. Scanned ghp_,
+           github_pat_, gho_, sk-, gsk_ (Groq), npg_ (Neon), postgres://user:pw@.
+           "sk-" hits are "risk-"/"mask-"; the only URL hit is the placeholder in
+           .env.example. REMINDER A4: real values still live in backend/.env.
+        7. OK, no change: checked in Neon itself (pg_indexes), not just models.py —
+           repositories.user_id, pull_requests.repository_id,
+           predictions.pull_request_id, predictions.created_at all indexed.
+        TIMING (real GitHub + Neon + Groq, flask#6133, rolled back, 5 warm runs each):
+           WITH LLM    median 2436 ms (2230-2508)   cold first run 2913 ms
+           WITHOUT LLM median 1843 ms (1802-2078)
+           stages: GitHub 1520-1600 | LLM ~560 | save 178 | load PR 90 |
+                   author history 45 | score 3 | features 0
+        PRD 800 ms target: MISSED by ~2.3x without the LLM, ~3x with it. See D6.
+
+[x] B17. Step 23 gate DONE (2026-09-14). 158 backend tests pass (was 151).
+        - tests/test_api.py (7 tests, TestClient + unittest.mock.patch): health 200;
+          POST /repositories creates one row; twice -> still one row, same id;
+          GitHub 404 -> 404 {"detail": "Repository not found or not public"} and no
+          row; POST /predictions with services.github.get_pr/get_pr_files/
+          get_pr_commits and services.explain.generate_explanation mocked -> 200,
+          exactly one new prediction (author_pr_count 2.0, mocks called with
+          acme/widgets/42); both history endpoints return that prediction; a test
+          proving the suite can't reach api.github.com.
+        - conftest.py now holds db (rolled-back Neon transaction) AND client
+          (moved out of test_prediction_routes.py, no duplicate).
+        - NO REAL NETWORK, ENFORCED: a session-wide autouse fixture refuses every
+          Python-level hostname lookup except localhost/testserver. A test that
+          forgets a mock fails with "network access is blocked in tests" instead
+          of calling GitHub/Groq. Neon still works (libpq resolves in C).
+        - Tests using `db` are auto-marked `db` (registered in pytest.ini).
+        GATE, HONESTLY: "whole suite under 10 s with wifi off" is NOT met as
+        written. Full suite = 16.6 s and its 22 db tests need Neon (a hosted DB),
+        so they can't run offline. What IS proven: `pytest -m "not db"` = 136
+        tests in 3.2 s with every Python socket blocked AND DATABASE_URL pointed
+        at an unroutable host. 0 test rows (acme/*) left in Neon afterwards.
+        TO GET THE FULL GATE: run a local Postgres for tests (e.g. TEST_DATABASE_URL
+        -> localhost) — needs Postgres installed locally; not done, your call.
+
+[x] B16. Step 22 gate DONE (2026-09-14). Lint clean, build OK. All six items
+        verified in the browser against the real backend (8001) and frontend
+        (5173), using real clicks and in-page stubs for empty/failing responses.
+        1. EMPTY STATES now say what to do next:
+           - PR list: "No pull requests found in this repository. Open one on
+             GitHub, then check again." + a "Check again" button (verified: it
+             shows the skeleton, then the real 30 PRs). "0 shown" removed (B14).
+           - PR panel when NO repositories exist: "Connect a repository above to
+             see its pull requests." (was an impossible "Select a repository").
+           - History: "No analyses yet. Click Analyze above to score this pull
+             request." Risk panel: "Not analysed yet. Click Analyze to fetch…".
+           - Analysis saved with no measurements: "No measurements were saved
+             with this analysis. Click Analyze again to record them." (verified
+             by exact sentence).
+           - Repositories: "No repositories connected yet — add one above"
+             (already said what to do).
+        2. LOADING + DISABLED while in flight: connect input is now read-only
+           (greyed) and the button shows "Connecting…" disabled — previously
+           a success cleared anything typed during the request. Analyze already
+           verified in Step 21; Check again and Retry swap to the skeleton.
+        3. ERRORS never blank, never a stack:
+           - A non-JSON error body now reads "The server returned an error
+             (HTTP 502)." instead of "Request failed" (verified with an HTML 502).
+           - A failed Analyze shows the error ABOVE the last successful result,
+             which stays visible (B15).
+           - NEW src/components/ErrorBoundary.jsx around the routes: a crash
+             while rendering (verified by feeding a PR with no repository) shows
+             "Something went wrong on this page." + Reload page + Back to the
+             dashboard; no stack or TypeError on the page; keyed by path, so
+             navigating away clears it (verified). React has no hook for this,
+             so it is the project's only class component — an intentional
+             exception to CLAUDE.md's "plain functions" style.
+           - React itself logs a caught render error to the console in
+             development ("The above error occurred in the <PullRequestHeader>
+             component…"). That is React's dev logging, not app code, and it is
+             not shown on the page.
+        4. 375px: no sideways page scroll on the dashboard or PR page; nothing
+           off-screen; a long error message with a GitHub URL wraps (5 lines,
+           inside the screen). The history table no longer scrolls inside its
+           card: Model column hidden below sm (B15), and the Label column has no
+           right padding below sm — the measured overflow was exactly that 16px
+           (table 315px in a 309px card). Desktop keeps both.
+           Long titles, repo names and explanations now wrap (break-words).
+        5. KEYBOARD FOCUS: static audit — all 14 buttons, links and inputs in
+           src/**/*.jsx have a focus-visible style. In the browser, real Tab
+           presses through both pages: every stop matched :focus-visible with a
+           solid 2px outline. FIXED: the SELECTED repository button had a dark
+           outline on its dark background (invisible); it is now white. The
+           "Page not found" link had no focus style; added.
+        6. console.log: none anywhere in src (checked before and after). NEW lint
+           rule "no-console": "error" in .oxlintrc.json — verified it fails on a
+           deliberate console.log.
+        No real data changed during the checks (the only real POSTs re-connected
+        the existing pallets/flask row).
+        Both dev servers are still running (backend 8001, frontend 5173).
+        NOT committed yet: frontend/ polish (plus Steps 16-21).
+
+[x] B15. Step 21 gate DONE (2026-09-14). 151 backend tests pass; frontend lint
+        clean, build OK.
+        Verified in the browser against the real backend (8001) and frontend
+        (5173), on pallets/flask#6133:
+        [x] Direct load of /pr/<id> (a full page load, so the data comes from
+            the API, not the dashboard link): repo, #6133, merged badge, title,
+            author, opened/merged dates, "View on GitHub" (new tab, rel
+            noopener noreferrer).
+        [x] The most recent saved analysis shows on arrival: RiskBadge
+            "Low risk 0.20", "Analysed <date> · model xgb-v1", the explanation,
+            and all 16 features in a fixed order. History table: Date, Score,
+            Label, Model.
+        [x] Analyze, with the click handler called TWICE before React could
+            re-render (harsher than a real double-click): exactly ONE POST
+            /predictions, and the database gained exactly one row (flask#6133:
+            1 -> 2 saved predictions).
+            Staged text on the timer: 0.5 s "Fetching PR data…" (spinner,
+            aria-live="polite", button "Analyzing…" disabled, aria-busy="true");
+            1.8 s "Scoring…"; 2.8 s "Generating explanation…". On success the
+            result updated, the button came back as "Analyze again", history
+            grew 1 -> 2.
+        [x] Analyze failing (POST /predictions forced to 502 in the page): the
+            API's message inline with Retry, button re-enabled, no stage text,
+            nothing saved.
+        [x] Unknown PR id: one "Pull request not found" + Retry + Back.
+            BUG FOUND AND FIXED during the check: the error first appeared
+            TWICE (header and history both failed for the same reason). The
+            page now shows only Back and the one error when the PR cannot load.
+        [x] Phone width 375px: no sideways page scroll; the history table
+            scrolls inside its own card; the feature table fits.
+        What was built:
+          - src/components/RiskBadge.jsx: green / amber / red by label, the
+            label written out (colour is never the only signal), score to two
+            decimals.
+          - src/components/ExplanationPanel.jsx: paragraph + a table of the
+            features. Rows follow a fixed order because the backend stores
+            features in a Postgres JSONB column, which does not keep key order.
+          - src/components/HistoryTable.jsx: date, score, label, model version.
+          - src/components/StateBadge.jsx: moved out of Dashboard.jsx so both
+            pages share it. src/format.js: shared date and score formatting.
+          - src/pages/PRDetail.jsx replaces the Step 20 placeholder. The
+            double-click guard is a ref (updates immediately), not only the
+            disabled attribute (which waits for a re-render). Stage timings
+            follow the pipeline's measured stages.
+        DIFFERENCE FROM THE STEP 21 PROMPT — a backend route was added:
+          GET /pull-requests/{pr_id} -> the PR with its repository nested
+          (404 for unknown ids). There was no API for one PR's metadata, so the
+          page could not show its header on a refresh or direct link. Service:
+          repo_sync.get_pull_request (history.pull_request_predictions now
+          reuses it). 2 new tests. src/api.js gained getPullRequest.
+        [x] DONE in Step 22: a failed Analyze now shows the error above the last
+            result; on phones the history table fits its card (Model column
+            hidden, Label column padding removed).
+        LESSON: searching for `fetch(` also matches `refetch(` — the Step 21
+          first search reported a false hit in Dashboard.jsx. Use a word
+          boundary: grep -E '(^|[^A-Za-z0-9_.])fetch\('.
+        Real data added in Neon: a second prediction for flask#6133.
+        NOT committed yet: frontend/ and the backend route (plus Steps 16-20).
+
+[x] B14. Step 20 gate DONE (2026-09-14). Lint clean, build OK.
+        Verified in the browser (backend on 8001, frontend on 5173):
+        [x] Connect form, client-side validation: "flask" -> inline "Enter the
+            repository as owner/name, for example pallets/flask." — the network
+            log shows NO request was sent.
+        [x] Repo that does not exist -> the API's "Repository not found or not
+            public" shown inline; the typed text stays for correcting.
+        [x] "https://github.com/pallets/flask" -> connects (upsert of the
+            existing row, no new data), input clears, repo selected, URL gets
+            ?repo=<id>, 30 PRs with number, title, author, state badge and a
+            GitHub link (new tab, rel="noopener noreferrer").
+        [x] Clicking a PR row -> /pr/<id> (client-side); Back -> same ?repo,
+            flask still selected, PRs reloaded.
+        [x] The three required states, for BOTH panels:
+            repositories — ERROR against the real backend (stopped): "Could not
+            reach the API at http://localhost:8001. Is the backend running?" +
+            Retry; Retry while still down keeps the error (no crash); Retry
+            after restart recovers. EMPTY: "No repositories connected yet — add
+            one above". LOADING on a fresh load: 3 skeleton rows + screen-reader
+            "Loading repositories…".
+            pull requests — LOADING: 6 skeleton rows, no stale rows from before;
+            ERROR: API message + Retry; EMPTY: "No pull requests found in this
+            repository."
+        [x] Phone width 375px: no horizontal scroll, nothing off-screen, form
+            stacks vertically, long titles truncate, GitHub link stays visible.
+        What was built:
+          - src/pages/Dashboard.jsx: connect form, repository list, PR list.
+            The selected repository is kept in the URL (?repo=<id>) so Back
+            from a PR returns to it. The form also accepts a pasted GitHub URL;
+            validation mirrors the backend's rules. The GitHub link sits beside
+            each row, not inside the row link (nested links are invalid HTML).
+          - src/components/ErrorMessage.jsx and SkeletonRows.jsx, shared so
+            Step 21 can reuse them.
+          - src/App.jsx: header + routes (/, /pr/:id, and a "Page not found"
+            page). src/main.jsx: BrowserRouter.
+          - src/pages/PRDetail.jsx: a PLACEHOLDER showing the PR id and a Back
+            button — Step 21 replaces it.
+        DEPENDENCY NOTES:
+          - react-router installed as v8.3.1 (npm's current), not v7 as the
+            playbook assumes. The declarative API used here (BrowserRouter,
+            Routes, Link, useSearchParams, useParams, useNavigate) works.
+          - react-router is outside CLAUDE.md's stack list; added because the
+            Step 20 prompt required it. CLAUDE.md's "Frontend:" line should
+            list it so future sessions do not flag it (not edited — your file).
+        [x] DONE in Step 22: "0 shown" no longer appears next to the empty message.
+        HOW THE EMPTY / LOADING / ERROR STATES WERE TESTED (reuse in Step 22):
+          the browser tool's scripts run in the page's own JavaScript world
+          (they can see React's __reactFiber$ keys), so replacing window.fetch
+          in the page reaches api.js. Trigger refetches through the app's own
+          UI (connect, Retry, header link + repo click, PR row + Back) — a
+          synthetic history.pushState + popstate pair does NOT remount the page.
+          Browser tool batches are limited to 25 actions.
+        Both dev servers are still running (backend 8001, frontend 5173).
+        NOT committed yet: the whole frontend/ folder (plus Steps 16-18).
+
+[x] B13. Step 19 gate DONE (2026-09-14).
+        [x] The dev server serves a page that calls getRepos() through
+            src/api.js and useApi and renders the raw JSON (pallets/flask).
+            Backend log: GET /repositories 200 — the browser request from
+            localhost:5173 to the API passed CORS.
+        [x] With no backend running, the page showed "Could not reach the API
+            at http://localhost:8001. Is the backend running?" plus Retry.
+        What was built (frontend/):
+          - Scaffolded with create-vite: React 19.2, Vite 8.3. Template demo
+            page, App.css, sample images and public/icons.svg removed.
+          - Tailwind 4.3 per the current Vite guide: the @tailwindcss/vite
+            plugin in vite.config.js and @import "tailwindcss" in index.css.
+            Tailwind v4 has NO tailwind.config.js — LLD v2 still lists one;
+            update the LLD in Step 26.
+          - src/api.js: the six functions. Also: a clear message when
+            VITE_API_URL is unset or the backend is unreachable, and FastAPI's
+            422 field-error lists turned into readable text instead of
+            "[object Object]".
+          - src/useApi.js: {data, loading, error, refetch}; only the latest call
+            may update state, so a slow earlier response cannot overwrite a
+            newer one.
+          - frontend/.env (VITE_API_URL=http://localhost:8000) is gitignored by
+            the root .gitignore; frontend/.env.example is committed instead.
+          - src/index.css sets a light page background and dark text as the
+            base style: in a dark-mode browser the first page had a dark
+            background with nearly invisible dark text.
+        "NO COMPONENT MAY CALL FETCH" IS ENFORCED BY LINT, not just a rule:
+          .oxlintrc.json bans the fetch global everywhere except src/api.js
+          (verified: a deliberate fetch in a component fails `npm run lint`).
+          The template uses oxlint, not ESLint. GAP: `window.fetch(...)` is not
+          caught — keep grepping for it.
+        !! PORT 8000 IS TAKEN by another project: SpeechFlow AI Agent
+          (~/Desktop/speechflow, uvicorn --reload, running since 2026-09-10).
+          While it runs, a frontend using VITE_API_URL=http://localhost:8000
+          talks to SPEECHFLOW, not this backend. Either stop SpeechFlow while
+          working here, or run this backend on 8001 and set VITE_API_URL to
+          match. Not touched.
+        LOCAL DEV SERVERS: .claude/launch.json starts the backend on 8001 and
+          the frontend on 5173 with VITE_API_URL overridden to 8001. It holds
+          absolute paths for this Mac — do not commit it as is.
+          The preview runner may not execute venv/bin/uvicorn from Desktop
+          ("Operation not permitted", macOS provenance attribute); starting it
+          as `./venv/bin/python -m uvicorn` works.
+        Dev-only note: React StrictMode runs effects twice in development, so
+          GET /repositories appears twice in the backend log. Production builds
+          call it once.
+        NOT committed yet: the whole frontend/ folder (plus Steps 16-18).
+
+[x] B12. Step 18 gate DONE (2026-09-14). 149 tests pass (1 warning, from
+        Starlette's own test client — a deprecated anyio alias, not our code).
+        [x] Full flow on real GitHub, Groq and Neon through the API:
+            GET /repositories -> GET /repositories/{id}/pull-requests ->
+            POST /predictions (flask#6162, closed, Low 0.238) HTTP 200 in
+            3,300 ms -> PR history 0 -> 1 and repository history 1 -> 2, the new
+            prediction first in both.
+        [x] /docs lists exactly: /health, /predictions,
+            /predictions/pull-request/{pr_id}, /repositories,
+            /repositories/{repo_id}/predictions, /repositories/{repo_id}/pull-requests
+        [x] GET /debug/features/... -> 404.
+        What changed:
+          - main.py: POST /predictions, GET /predictions/pull-request/{pr_id},
+            GET /repositories/{repo_id}/predictions — each only loads and
+            delegates.
+          - services/history.py (new): the two history queries, newest first,
+            repository history limited to 50. Kept out of main.py per CLAUDE.md
+            rule 4. Unknown PR or repository id -> 404, not an empty list (D0f).
+          - tests/conftest.py (new): the rolled-back Neon session fixture plus
+            repository and pull_request fixtures, now shared by test_pipeline.py
+            and the new tests/test_prediction_routes.py (11 tests).
+        Real data now in Neon, kept on purpose: predictions for flask#6133 and
+        flask#6162.
+        FOR STEP 24 / THE PRODUCT:
+          - POST /predictions took 3,300 ms end to end (GitHub + Groq + Neon).
+          - flask#6162 was CLOSED WITHOUT MERGING, and the API still scored it.
+            Decide whether the dashboard should score closed-unmerged PRs at all
+            (they will never be deployed), or show them as "not deployable".
+          - Its explanation says the author "has no prior merged work in this
+            repo" — that is the D0j artefact (only 30 recent PRs synced), not a
+            fact about the author.
+        NOT committed yet: main.py, services/history.py, removal of
+        services/debug_features.py, tests/conftest.py, tests/test_pipeline.py,
+        tests/test_prediction_routes.py (plus the Step 16-17 files).
+
+[x] B11. Step 17 gate DONE (2026-09-14). 138 tests pass.
+        [x] Real run on pallets/flask#6133 (real GitHub, Groq, Neon): exactly one
+            predictions row inserted (0 -> 1); 7 stage timing lines + 1 total
+            line. Low 0.195; the saved explanation is faithful. That row is kept
+            in Neon on purpose as real prediction history.
+        [x] Tests run against Neon inside a rolled-back transaction: verified
+            no test rows (acme/widgets) were left behind.
+        Differences from the Step 17 prompt, and why:
+          - Unknown pull_request_id raises NotFoundError (404), not
+            PredictionError (500): a bad id is the caller's mistake, and Step 06
+            routes already return 404 for unknown ids (D0f). A PR deleted on
+            GitHub is also 404. PredictionError is kept for a failed save.
+          - 7 stage lines (load, fetch from GitHub, count author history, build
+            features, score, explain, save) plus one total line giving the time
+            with and without the explanation, for the Step 24 timing check.
+          - The prediction row is added only after every stage succeeds; a
+            failed commit is rolled back.
+        STAGE TIMINGS on the real run (2,858 ms total):
+          load 117 | GitHub 1,640 | author history 52 | features 0 | score 16 |
+          explain 717 | save 314 ms -> 2,141 ms WITHOUT the explanation.
+        !! Over the PRD's < 800 ms target (excluding the LLM). GitHub is 77% of
+        it: get_pr, get_pr_files and get_pr_commits run one after another.
+        Options for Step 24: fetch the three concurrently (thread pool; should
+        roughly halve it), and state the budget as "excluding external APIs"
+        in the report — the model itself takes 16 ms.
+        Still open from this step:
+          - B8 and D1 closed in Step 18 (see B12).
+        NOT committed yet: services/pipeline.py, tests/test_pipeline.py (plus the
+        Step 16 files listed in B10).
+
+[x] B10. Step 16 gate DONE (2026-09-14) — ml/check_explanations.py, 3 rounds.
+        10 cases: 7 real PRs spread across the score range (Low, Medium, High)
+        plus 3 edge cases (empty PR, one-line README fix, huge weekend CI and
+        config change). Automatic checks per explanation: numbers not in the
+        prompt, alarming wording for the label, sentence count, markdown.
+        ROUND 1 (Step 15 design: 5 features furthest from the mean):
+          automatic checks 0/10 flagged, but READING found invented reasoning:
+          - pylint#10275: prompt "changes configuration files: no (true for 18%
+            of pull requests)" became "does not modify configuration files, a
+            scenario that occurs in only 18%" (backwards) + "higher likelihood
+            of unforeseen interactions" (invented).
+          - sentry#4396: "well-reviewed ... vetted thoroughly" from 0 review
+            comments. sphinx/streamlink: "well covered by tests", "ranges the
+            model has seen". pylint#11046: included tests named a driver of
+            the elevated score.
+          Root cause: the prompt listed features that are UNUSUAL and asked the
+          LLM to explain the SCORE, so unusual was read as causal. Also the
+          relative-deviation measure capped "smaller than average" at 1.0 while
+          any "no" on a yes/no feature always scored 1.0, so boring "no"s filled
+          Low explanations and "1 file, 2 lines" never appeared.
+        FIX (changes Step 15's design — same as Step 27's planned SHAP idea):
+          - services/model.py contributions(): XGBoost's built-in tree SHAP
+            values (pred_contribs), no new dependency. Test proves they add up
+            exactly to the score.
+          - explain.top_drivers(): the 5 features that moved THIS score most,
+            each marked "raised the score" / "lowered the score".
+          - Yes/no features phrased as the PR's actual state with the matching
+            share: "does not change configuration files, like 82% of PRs".
+          - Prompt forbids guessing about review quality, testing, the code,
+            the author or the model's history.
+        ROUND 2: no invented reasoning, all numbers and directions right, but
+          ranking claims wrong in ~6/10 ("largest influence came from X" when X
+          was not measurement 1); some listed all 5; some copied lines verbatim.
+          Fix: numbered list, "measurement 1 had the largest effect", "discuss
+          only the first 2 or 3 in that order", "do not mention unlisted
+          measurements".
+        ROUND 3 (final): order correct 10/10, directions correct 10/10, numbers
+          correct 10/10, no alarming language for Low. The 2 automatic flags were
+          false positives ("less risky") — checker fixed, test added.
+        RESIDUAL ISSUES, accepted, worth mentioning in the report:
+          - tox#4051 leaked instruction text: "...but we are only discussing the
+            first two."
+          - Mild paraphrase beyond the data: pylint#11046 called 46 prior PRs
+            "the author's recent activity"; streamlink called a short commit
+            message "a positive sign".
+          - Prose is robotic ("The first measurement, ... lowered the score").
+          - Explanations faithfully expose MODEL quirks that read oddly to a
+            user: "0 hours between opening and merging raised the score" (empty
+            PR), "13 lines removed (average 157) raised the score", and
+            author_pr_count is a top-3 driver in 6/10 — the label-biased feature
+            (D0o). Another reason to drop author_pr_count.
+        SUGGESTED FOLLOW-UPS (not done):
+          a) Production guardrail: in generate_explanation, reject any LLM reply
+             containing a number that is not in its prompt and use the
+             fallback. ml/check_explanations.numbers_not_in already does the
+             check.
+          b) Drop author_pr_count and retrain (D0j, D0o, and the explanations).
+        NOT committed: services/model.py (contributions), services/explain.py,
+        tests/test_model.py, tests/test_explain.py, ml/check_explanations.py,
+        tests/test_check_explanations.py.
+
 [x] B9. Step 15 gate DONE (2026-09-14). 126 tests pass.
+        NOTE: Step 16 replaced the driver selection below (deviation from the
+        mean) with the model's own contributions — see B10.
         [x] Live Groq call on the obviously-risky PR (score 0.366, Medium):
             "...changes 50 files and adds 1,980 lines, both well above the
             averages of 5.7 files and 347 lines added... moderately elevated".
@@ -189,9 +629,9 @@ B. OPEN GATES — steps done in code but not yet fully verified
             slightly HIGHER for risky PRs, touches_config slightly LOWER, and
             is_weekend showed no signal. If it still fails on the final model,
             that is a finding to report, not a reason to hand-tune the model.
-        [ ] "App fails loudly at startup" is only true once main.py imports
-            services.model. Nothing imports it yet — Step 17 (pipeline.py) must
-            import it at module level so a bad model stops uvicorn from starting.
+        [x] App fails loudly at startup — VERIFIED in Step 18: main.py imports
+            services.pipeline, which loads the model; importing main with a fake
+            feature in FEATURE_ORDER raised the feature-order RuntimeError.
 
 [x] B7. Step 13b gate DONE via option 2: no configuration clears 0.75 in
         leave-repos-out CV. Best pooled 0.663 (14-day window + repo percentiles,
@@ -317,7 +757,7 @@ D. SCHEDULED FOR LATER STEPS — do not do these early
         Before collecting, check each candidate repo's merged-PR ratio and
         prefer repos that merge most PRs through GitHub.
 
-[~] D0h. Step 09 half DONE — collect.py uses get_pr(). Step 17 still must too. !! CRITICAL FOR STEP 09 (collect.py) AND STEP 17 (pipeline.py):
+[x] D0h. DONE — collect.py (Step 09) and services/pipeline.py (Step 17) both use get_pr(). !! CRITICAL FOR STEP 09 (collect.py) AND STEP 17 (pipeline.py):
         pass the FULL PR object from github.get_pr() into
         build_feature_vector — NEVER the item from list_pull_requests().
         The list endpoint omits changed_files, additions, deletions, commits
@@ -612,7 +1052,15 @@ D. SCHEDULED FOR LATER STEPS — do not do these early
           c) drop repos whose labels barely fire (e.g. <2% risky) and say so.
         Re-check all of this on the full 16-repo run (B3/B4/B5).
 
-[ ] D0j. !! author_pr_count TRAINING-SERVING SKEW RISK (Step 09 vs Step 17).
+[ ] D0j. !! author_pr_count TRAINING-SERVING SKEW — NOW SEEN LIVE (Step 17).
+        The real pipeline run on pallets/flask#6133 computed author_pr_count = 0
+        because Neon holds only flask's 30 most recent PRs; the training mean
+        is 33. So live, this feature pushes almost every score DOWN (the saved
+        explanation even names it: "0 (average 33) ... lowered the score").
+        Dropping the feature and retraining fixes this, D0o and the Step 16
+        explanation problem at once.
+        (original note follows)
+        TRAINING-SERVING SKEW RISK (Step 09 vs Step 17).
         Serving (repo_sync.count_prior_merged_prs, per the Step 17 plan)
         counts only PRs stored locally — the latest 30 synced per repo — so
         live values will be small. Training (Step 09) would count from ~2
@@ -625,7 +1073,10 @@ D. SCHEDULED FOR LATER STEPS — do not do these early
              and use total_count — works identically in training and serving
           b) or drop author_pr_count from FEATURE_ORDER.
 
-[ ] D1. Remove the Step 08 debug route. It lives in TWO places, both marked
+[x] D1. DONE in Step 18 — route, services/debug_features.py and its import removed;
+        searched the backend, no references left. repo_sync.get_repository and
+        count_prior_merged_prs kept (the pipeline and history service use them).
+        Remove the Step 08 debug route. It lives in TWO places, both marked
         "# TODO: remove before deployment":
           - main.py: GET /debug/features/{repo_id}/{pr_number}
           - services/debug_features.py (delete the whole file)
@@ -649,6 +1100,20 @@ D. SCHEDULED FOR LATER STEPS — do not do these early
 
 [ ] D5. Update LLD.md to match whatever the code actually became.
         Step 26.
+
+[ ] D6. PIPELINE IS ~2.4 s, PRD TARGET 800 ms (measured in Step 24, B18). YOUR CALL.
+        Where the time goes: GitHub 1.5-1.6 s (get_pr, files, commits run one
+        after another), LLM ~560 ms, Neon ~45 ms per round trip (save 178, load 90).
+        Options, cheapest first:
+        a) Fetch the 3 GitHub calls concurrently (thread pool): est. -1.0 s.
+        b) Load the PR and the default user in one query: est. -45 ms.
+        c) Return the score first and fill in the explanation afterwards: removes
+           ~560 ms from the response, but needs an extra endpoint or polling.
+        Even with a)+b), "without LLM" lands around 800-900 ms, so the honest
+        report line is probably "~0.8-0.9 s without the explanation, ~1.4 s
+        with it" rather than "under 800 ms".
+        The timing script (real GitHub/Neon/Groq, rolled back) is in the session
+        scratchpad, not the repo — ask if you want it kept as backend/ml/time_pipeline.py.
 
 ================================================================
 E. PROJECT ADMIN — not code
