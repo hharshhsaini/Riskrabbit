@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     GITHUB_TOKEN: str
     OPENAI_API_KEY: str
+    OPENAI_BASE_URL: str | None = None
+    LLM_MODEL: str = "openai/gpt-oss-20b"
     MODEL_PATH: str = "ml/model.json"
     DEFAULT_USER_EMAIL: str = "dev@example.com"
     ENV: str = "development"

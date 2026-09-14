@@ -1,9 +1,13 @@
 from collections.abc import Generator
+from typing import TYPE_CHECKING
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from config import settings
+
+if TYPE_CHECKING:
+    from models import User
 
 engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
 
@@ -20,3 +24,18 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def get_default_user(db: Session) -> "User":
+    """Return the single seeded user. Raises if startup seeding has not run."""
+    from models import User
+
+    user = db.execute(
+        select(User).where(User.email == settings.DEFAULT_USER_EMAIL)
+    ).scalar_one_or_none()
+    if user is None:
+        raise RuntimeError(
+            f"No user found for DEFAULT_USER_EMAIL={settings.DEFAULT_USER_EMAIL!r}. "
+            "The application startup handler seeds this row — check that it ran."
+        )
+    return user

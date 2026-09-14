@@ -1,0 +1,518 @@
+REMAINING — Predictive Deployment Risk Assessment System
+Running list of everything deferred. Nothing here is forgotten; it is parked.
+Last updated: 2026-09-14, code for Steps 02-13b committed (branch, not pushed); collection still running
+
+================================================================
+A. BLOCKED ON YOU — needed before the next steps can run
+================================================================
+
+[x] A1. DONE 2026-09-13 — backend/.env — replace DATABASE_URL placeholder with the real Neon
+        POOLED connection string (the host with "-pooler" in it).
+        Neon project exists (Singapore, branch production, db neondb,
+        pooling ON). Copy the string with the Copy button, not by selecting
+        the masked text. channel_binding=require is fine — psycopg2 bundles
+        libpq 17.
+        Blocks: Step 02 live gate, and everything from Step 05 onward.
+
+[x] A2. DONE 2026-09-13 (fine-grained, verified limit=5000, write refused) — backend/.env — replace GITHUB_TOKEN with a real PAT.
+        Use a token with NO write scopes — reading public repos needs none,
+        and authentication alone is what raises the rate limit to 5,000/hr.
+        Preferred: fine-grained token, "Public Repositories (read-only)".
+        Acceptable: classic token with every scope box left UNCHECKED.
+        NOTE: BUILD-PROMPTS.md says public_repo scope — that grants PUSH
+        access to all your public repos and is more than this project needs.
+        Blocks: Step 04 verification, Step 09 data collection.
+
+[x] A3. DONE 2026-09-13 — LLM key. Using Groq free tier instead of OpenAI,
+        through the same openai library (no new dependency).
+        backend/.env: OPENAI_API_KEY=<groq key>,
+        OPENAI_BASE_URL=https://api.groq.com/openai/v1,
+        LLM_MODEL=openai/gpt-oss-20b. config.py and .env.example updated.
+        Verified 2026-09-13: settings reads the key, real completion works.
+        Still to do in Step 15: pass settings.OPENAI_BASE_URL and
+        settings.LLM_MODEL when creating the OpenAI client.
+        !! MUST pass reasoning_effort="low" for gpt-oss models. Tested: with
+        the default effort and max_tokens=200, the model spent all 200 tokens
+        on hidden reasoning and returned EMPTY content (finish=length). With
+        reasoning_effort="low" it used 71 tokens and returned a good answer.
+        An empty explanation would silently reach the dashboard.
+        Also for Step 16: the test answer said "scheduled over the weekend"
+        and "critical failures" — slight overstatement, exactly what the
+        faithfulness check must catch.
+        Tell mentor the explanation step runs on an OpenAI-compatible API
+        (Groq), not OpenAI itself — PRD page 1 says "OpenAI API".
+
+[ ] A4. ROTATE BOTH CREDENTIALS — the Neon password and the GitHub token
+        were pasted into a chat on 2026-09-13, so treat them as exposed.
+        (The Groq key was pasted only into .env, not chat — no rotation needed.)
+        - Neon: Connect dialog -> "Reset password" -> paste new string in .env
+        - GitHub: Settings -> Developer settings -> Fine-grained tokens ->
+          delete riskrabbit token -> create a new read-only one -> .env
+        Deferred by Harsh on 2026-09-13 — do at the end with the rest of this list.
+        Next time, paste secrets straight into backend/.env yourself.
+
+================================================================
+B. OPEN GATES — steps done in code but not yet fully verified
+================================================================
+
+[x] B1. DONE 2026-09-13 — Neon PG 18.6: 4 tables, all indexes/unique/check constraints present, 2 startups -> users count 1. Step 02 live gate. Once A1 is done:
+          cd backend && ./venv/bin/uvicorn main:app --reload
+        Expect "Application startup complete".
+        Then in the Neon SQL editor confirm:
+          - 4 tables exist (users, repositories, pull_requests, predictions)
+          - users has exactly 1 row
+        Then restart the app and confirm users STILL has 1 row
+        (the seed must not create a second user).
+
+        Alternative if you would rather not touch Neon yet: start Docker
+        Desktop and I will verify create_all + the seed against a throwaway
+        local Postgres container instead.
+
+[ ] B2. Step 09 gate — collection is running (started 2026-09-14 ~00:40).
+        Already verified on a scratch copy: kill -9 mid-run plus a
+        half-written last line, then restart -> resumed, repaired the line,
+        no duplicates.
+        [x] An hour without crashing — confirmed 2026-09-14 01:40: running
+            since 00:39:56, 0 errors, 0 rate-limit sleeps, 1,211 PRs and
+            7,623 commits written, 4 of 16 repos complete.
+        [ ] Final count in the 3,000-5,000 range (expected ~4,700 PRs).
+            A background job re-labels automatically when the collector
+            exits (see B3).
+        Expected runtime: roughly 5 hours. About 14k API calls for PRs plus
+        ~9k for commit file lists, against 5,000/hour; the script sleeps
+        through rate limits on its own.
+        Useful commands (run from backend/):
+          wc -l ml/data/raw_prs.jsonl          # PRs collected so far
+          tail -f ml/data/collect.log          # live progress
+          kill $(cat ml/data/collect.pid)      # stop
+          nohup caffeinate -i ./venv/bin/python -m ml.collect >> ml/data/collect.log 2>&1 &
+                                               # restart / resume
+        If the laptop sleeps or the process stops, just run the restart
+        command — it resumes where it left off.
+        encode/starlette now redirects to Kludex/starlette; the list uses the
+        new name.
+
+[ ] B3. Step 10 gate — FINAL RE-RUN NEEDED after collection finishes.
+        Current result covers only the 3 repos fully collected so far
+        (mypy, sentry-python, netbox; 900 PRs): 49 risky = 5.4%, inside the
+        5-15% gate. A background job re-runs ml.label automatically when the
+        collector exits and writes ml/data/label_summary.txt. Then:
+          ./venv/bin/python -m ml.label --inspect 20
+        and hand-check the 20 examples again across all 16 repos.
+
+[ ] B4. Step 11 gate — FINAL RE-RUN NEEDED after final labels. A background
+        job runs ml.audit automatically once label_summary.txt is written and
+        saves ml/data/audit_summary.txt. Partial result (900 PRs, 3 repos):
+        PASS, 8 features separate the classes. Re-check the per-repo and
+        per-author sections on all 16 repos.
+
+[ ] B7. Step 13b gate — FINAL NUMBERS NEEDED after the full run. A background
+        job runs ml.experiments (with and without author_pr_count) after the
+        final training and saves ml/data/experiments_summary.txt. Then update
+        the tables in docs/model-ceiling.md from it and remove its
+        "preliminary" banner. Gate option 2 (written ceiling paragraph) is
+        drafted in that file.
+
+[ ] B6. Step 13 gate + COMMIT — the same background job (B5) now also trains
+        XGBoost and writes the REAL artifacts to backend/ml/: model.json,
+        feature_order.json, metrics.json (plus ml/data/train_summary.txt).
+        Then:
+          1. Read train_summary.txt. Gate: XGBoost must beat the baseline.
+             If XGBoost ROC-AUC >= 0.75 go to Step 14, otherwise Step 13b.
+             Judge on the cross-validation mean, not only the single
+             3-repo hold-out (see D0s).
+          2. Commit the three artifact files (user asked for this in
+             Step 13). Git rule for this project's assistant: branch first
+             when on main, unless told to commit to main.
+          3. NOTE: committing only the 3 JSON files does not make the report
+             reproducible — the code that produces them (Steps 02-13) is
+             still uncommitted (see C1). Commit the code too.
+        Smoke-test artifacts were written to a scratch folder only; the real
+        backend/ml/*.json files do not exist yet. They are not gitignored
+        (checked); ml/data/ is.
+
+[ ] B5. Step 12 gate — REAL RUN NEEDED after final audit. A background job
+        runs ml.train automatically once audit_summary.txt is complete and
+        saves ml/data/train_summary.txt, using the default held-out repos
+        pytest-dev/pytest, wagtail/wagtail, aio-libs/aiohttp. Write the
+        baseline ROC-AUC down — it is the floor Step 13 must beat.
+
+================================================================
+C. GIT — nothing committed or pushed yet
+================================================================
+
+[x] C1. DONE 2026-09-14 — Steps 02-13b committed in ONE commit on branch
+        steps-02-13-backend-ml-pipeline (created from main). NOT pushed.
+        Before committing: 91 tests passed, and all 27 files were scanned for
+        credentials (the leaked Neon/GitHub values and any token-shaped
+        strings) — none found. backend/.env, venv/, ml/data/ are gitignored.
+        NOT in this commit: backend/ml/model.json, feature_order.json,
+        metrics.json — they are written after collection finishes (B6) and
+        need their own commit.
+        To merge into main and push when ready:
+          git checkout main
+          git merge steps-02-13-backend-ml-pipeline
+          git push -u origin main
+
+[ ] C2. Decide commit cadence: one commit per playbook step is recommended
+        so the history reads as the build log for the report.
+
+================================================================
+D. SCHEDULED FOR LATER STEPS — do not do these early
+================================================================
+
+[x] D0. DONE in Step 07. features.py takes commit_count from get_pr()["commits"],
+        NOT len(get_pr_commits()). GitHub stops listing commits after 250
+        per PR (and files after 3,000), so the list undercounts huge PRs.
+        Noted in comments in services/github.py.
+
+[x] D0b. DONE in Step 08 (2026-09-14). File pagination verified on a REAL
+        417-file PR, hawkrives/gelite#66: 5 pages fetched, 417 files listed,
+        matching github.com's "Files changed 417".
+
+[x] D0c. DONE in Step 06. services/repo_sync.py ALREADY EXISTS (created in Step 05
+        for connect_repository / list_repositories). Add the PR upsert
+        function to that file — do not create a second one.
+
+[ ] D0d. Neon DB now holds one real row: pallets/flask in repositories.
+        Left on purpose — Step 06 needs a connected repo.
+
+[ ] D0e. GET /repositories/{id}/pull-requests returns EVERY stored PR for the
+        repo, not just the latest 30 it syncs. Rows accumulate across syncs
+        (by design — old PRs keep their prediction history). If the list
+        gets long, add a limit or pagination during the Step 22 polish pass.
+
+[ ] D0f. Step 06 added NotFoundError (exceptions.py) with a 404 handler, and
+        moved Step 05's GitHub-404 mapping out of the route into
+        repo_sync.connect_repository. Step 18 routes and the Step 24
+        hardening pass should raise NotFoundError for unknown ids.
+
+[x] D0g. DONE in Step 09 — repos vetted, flask and requests excluded. Step 09 repo choice: in pallets/flask's latest 30 PRs, only 1 was
+        merged and 29 were closed without merging (seen live 2026-09-14).
+        The playbook lists flask as an example training repo, but Step 09
+        collects MERGED PRs only, so flask would yield very little data.
+        Before collecting, check each candidate repo's merged-PR ratio and
+        prefer repos that merge most PRs through GitHub.
+
+[~] D0h. Step 09 half DONE — collect.py uses get_pr(). Step 17 still must too. !! CRITICAL FOR STEP 09 (collect.py) AND STEP 17 (pipeline.py):
+        pass the FULL PR object from github.get_pr() into
+        build_feature_vector — NEVER the item from list_pull_requests().
+        The list endpoint omits changed_files, additions, deletions, commits
+        and review_comments. features.py falls back to counting the file and
+        commit lists for most of those, but review_comment_count silently
+        becomes 0.0 for every PR. If training uses list items and serving
+        uses get_pr(), the model learns review_comment_count is always 0 and
+        then sees real values live: training-serving skew.
+        collect.py must call get_pr() for every PR it saves (one extra API
+        call per PR — budget for it in the rate-limit estimate).
+
+[ ] D0i. Step 07 feature decisions to mention in the report / viva:
+        - Test and config detection matches whole file and folder names, not
+          substrings, so latest_version.py is not a "test" and
+          environment.py is not "config".
+        - test_file_ratio divides by the number of LISTED files.
+        - pr_age_hours for a PR closed without merging stops at closed_at
+          (the table only covered merged and open PRs).
+        - Root-level files count as one directory "." in
+          unique_dirs_touched.
+
+[ ] D0k. EVIDENCE FOR D0h, found in Step 08. On hawkrives/gelite#66 GitHub's
+        files API reported 0 added / 0 removed for 75 of 417 files (every one
+        missing its "patch" — the diff was too big for the API). Summing the
+        file list gave +29,515 -25,225; the true totals are +40,478 -34,756,
+        about 27% short. features.py already prefers the PR totals, so the
+        live features were correct. But if collect.py ever saved list items
+        instead of get_pr() objects, lines_added / lines_removed /
+        total_churn would silently undercount exactly the large, risky PRs
+        the model most needs to learn. Filenames are still listed for those
+        75 files, so has_tests / touches_config / unique_dirs are unaffected.
+        The debug route's "all_three_match" is legitimately False for such
+        PRs — compare feature_value against github_pr_total.
+
+[ ] D0l. STEP 09 DATA DECISIONS — record these in the model card (Step 26):
+        - 16 repos, chosen by a vetting pass over 36 candidates on
+          2026-09-14 (stars, merge-through-GitHub ratio, human share,
+          2-year merged volume). The list and reasons are in ml/collect.py.
+          netbox (21.5k), mypy (20.6k) and wagtail (20.5k) are slightly above
+          the playbook's 20k-star guideline; kept for data volume.
+        - At most 300 PRs per repo, picked EVENLY across the 2-year window
+          rather than the newest 300, so busy repos are not all recent PRs
+          and no single repo dominates the dataset.
+        - Only PRs merged into the default branch. Bot PRs (dependabot,
+          renovate, pre-commit-ci...) excluded.
+        - PRs merged in the last 14 days excluded: they have not had time to
+          be reverted or hotfixed, so they would all be false "safe" labels.
+        - Default-branch commits cover the WHOLE window, not "the last 500"
+          as the playbook said. 500 commits reach back only weeks in busy
+          repos, so every older PR could never be labelled risky.
+        - Commit file lists are fetched only for fix/revert-like commits
+          landing within 14 days after a collected PR's merge (saves several
+          thousand API calls). Others have files = null.
+        - Diff text ("patch") is dropped from stored files; features never
+          read it.
+        The collection window is pinned in ml/data/cache/window.json.
+
+[x] D0m. DONE in Step 10 — Signal C dropped, hotfix window 7 days, merge-commit file lookup implemented. STEP 10 CONSTRAINTS created by Step 09:
+        - Signal C (post-merge bug issues) was NOT collected — no issue data
+          exists. Drop Signal C in label.py, or add an issues-collection step
+          first. (Step 10's own advice already allows dropping it.)
+        - The hotfix window in label.py must be <= 14 days. Commit file lists
+          were only fetched up to 14 days after each merge; widening beyond
+          that (e.g. Step 13b idea 1) needs a re-run with a larger
+          LABEL_MATURITY_DAYS.
+        - For a hotfix commit with files = null that is a merge commit of a
+          collected PR, look its files up via that PR's merge_commit_sha.
+
+[ ] D0n. STEP 10 LABEL METHODOLOGY — put this in the report / model card.
+        Gate history on the same 900 PRs:
+          21.4%  spec rules as written            -> hand-check: ~1-2 of 10 real
+           9.1%  + source files only, no sweeps,
+                   no hub files, no older fix PRs  -> ~2-3 of 10 real
+           5.4%  + fix must be by the PR's author,
+                   cite the PR (#N), or say
+                   "regression"                    -> ~3-4 of 10 real (final)
+        Hand-checked 8 same-author vs 8 other-author hotfix positives before
+        adding the last rule: same-author ~6/8 real, other-author ~2/8 real.
+        Deviations from the Step 10 prompt, each justified by inspection:
+          - Signal C dropped: no issue data collected (D0m).
+          - Hotfix subject word "patch" removed: meant mock/monkey-patching.
+          - Only the commit SUBJECT line is checked for fix words — squash
+            bodies are full of "* fix lint" lines.
+          - Shared files must be SOURCE files: not tests, docs, changelog,
+            lock, editor-config (.claude/.vscode...) or hub files touched by
+            >=5% of the repo's PRs.
+          - Fix commits touching >20 files (repo-wide sweeps) ignored.
+          - Fix PRs numbered lower than the target were opened before it
+            existed and cannot be its fix — ignored.
+          - Fix must be by the PR's author, cite #PR, or say "regression".
+        Signal A bug fixed during inspection: squash-merged revert subjects
+        'Revert "X (#12)" (#15)' and GitHub-truncated '…' titles did not
+        match; both now handled and tested.
+        ESTIMATED LABEL PRECISION: roughly 50% (from ~28 hand-checked
+        positives). Remaining false positives are mostly one author's
+        planned series of fixes landing minutes apart in the same
+        integration. No clean rule separates those from genuine quick
+        "oops" hotfixes, so tightening further was stopped.
+        CONSEQUENCE: noisy labels cap achievable ROC-AUC. The PRD target of
+        >=0.75 may not be reachable. Tell the mentor in Week 5 (playbook
+        Step 13b), not at the demo. Report PR-AUC too.
+
+[ ] D0o. STEP 11 AUDIT MUST CHECK AUTHOR BIAS created by Step 10.
+        The same-author rule means prolific authors who ship follow-up fixes
+        get more risky labels. If author_pr_count (or any author-correlated
+        feature) separates the classes strongly in Step 11, suspect the label
+        rule rather than real risk. Print positive rate per author for the top
+        authors in audit.py.
+
+[ ] D0p. STEP 11 FINDINGS (partial data: 900 PRs from mypy, sentry-python,
+        netbox). Decide the open questions BEFORE Step 12/13.
+        - Saved ml/data/dataset.csv, not dataset.parquet: pandas needs pyarrow
+          for parquet and pyarrow is not in the CLAUDE.md stack. CSV is fine at
+          this size. If you want parquet, approve adding pyarrow — it is a
+          one-line change in audit.py.
+        - Single-feature ROC-AUC (0.5 = no signal): review_comment_count 0.644,
+          author_pr_count 0.618, lines_added 0.612, commit_count 0.611,
+          total_churn 0.607, files_changed 0.600, lines_removed 0.567,
+          unique_dirs_touched 0.551. Timing and config features (is_weekend,
+          is_off_hours, touches_ci, touches_config) show no signal (~0.50).
+          No constant features.
+        - Means mislead for size features: lines_added mean is LOWER for risky
+          PRs (266 vs 410) because a few huge safe PRs inflate it, while its
+          median and ROC-AUC are higher for risky. audit.py now prints medians.
+          Explain this with medians in the report, not means.
+        - sentry-python contributes 53% of positives — only 3 repos so far,
+          re-check on all 16.
+        - AUTHOR BIAS CONFIRMED (evidence for D0o): the 5 authors with most
+          risky PRs hold 73.5% of all positives; some prolific authors sit at
+          10-15% risky while others with 27-47 PRs have 0. author_pr_count's
+          signal is probably largely an artefact of Step 10's same-author
+          hotfix rule.
+          RECOMMENDATION: drop author_pr_count from FEATURE_ORDER before
+          Step 13. That also resolves D0j (training-serving skew) in one move.
+          Alternative: keep it, but split train/test by author as well.
+        - [x] LEAKAGE CHECKED, NOT A PROBLEM — keep review_comment_count.
+          Probe 2026-09-14 on 40 PRs (20 risky, 20 safe): the feature equals
+          GitHub's listed review comments 40/40. Only 3 of 150 comments were
+          posted after merge (2%), and risky PRs had FEWER post-merge comments
+          (1 of 98) than safe PRs (2 of 52). ROC-AUC on the sample was 0.679
+          using all comments and 0.679 using pre-merge comments only. The
+          signal comes from review discussion before merge, not from people
+          reporting problems afterwards. Mention this check in the report.
+        - SERVING-TIME QUESTION: does the dashboard score OPEN PRs or merged
+          PRs awaiting deployment? For open PRs, pr_age_hours / is_weekend /
+          is_off_hours use "now" instead of the merge time, and commit and
+          review counts are still growing: a distribution shift from training
+          on merged PRs. Decide and document.
+        - Example worth discussing: netbox "Release v4.4.0" is labelled risky
+          (hotfix followed). Release merges bundle many changes and are
+          arguably the most deployment-like PRs — keep, but look at them in
+          Step 13 error analysis.
+
+[ ] D0q. STEP 12 SMOKE TEST (2026-09-14, 1,500 PRs from 5 repos) — the
+        pipeline works; the NUMBERS ARE NOT MEANINGFUL YET.
+        - Trained on 2 repos (600 PRs, 37 risky), held out moto, sqlfluff and
+          netbox (900 PRs, only 18 risky): ROC-AUC 0.464, PR-AUC 0.018
+          (random = 0.020). Leave-repos-out CV: 0.557 ± 0.080 over the 4
+          folds with >= 5 risky PRs. Near random.
+        - moto's CV fold had 1 risky PR and scored 0.973 — pure noise.
+          train.py now prints risky counts per fold and excludes folds with
+          fewer than 5 risky PRs from the mean.
+        - Dropping author_pr_count LOWERED held-out ROC-AUC (0.464 -> 0.305),
+          but with 18 test positives that is not evidence either way. Decide
+          D0j/D0o on the full dataset, not on this run.
+        - Collinear pair: test_file_ratio (-0.96) and has_tests (+0.80) have
+          opposite coefficients. Expected with few positives; do not
+          interpret coefficient signs in the report until the full run.
+
+[ ] D0t. STEP 13b RESULT (2026-09-14, 2,100 PRs from 7 repos) — no fix clears
+        0.75; gains are under +0.03. Write-up: docs/model-ceiling.md.
+        Best pooled leave-repos-out ROC-AUC (baseline; XGBoost always lower):
+          current 0.644 | 14-day window 0.652 | repo percentiles 0.635 |
+          both 0.649 | reverts only: 5 risky PRs, unscorable.
+          Without author_pr_count: 0.588 | 0.608 | 0.589 | 0.619.
+        CEILING ARGUMENT (key viva point): with label precision p, even a
+        perfect model scores at most ROC-AUC 0.5 + p/2. Hand-checked
+        precision ~35-50% -> ceiling ~0.68-0.75, before missed positives.
+        Observed 0.65 is just under it. Better labels, not a better model,
+        are needed to go higher.
+        DECISIONS FOR YOU AND THE MENTOR (tell the mentor NOW, Week 5):
+          a) Accept ~0.65 and report it honestly with docs/model-ceiling.md.
+          b) Ship the logistic-regression baseline instead of XGBoost? It
+             scores higher everywhere. Step 14 (services/model.py) is built
+             around XGBoost model.json — switching changes Step 14's design.
+             The PRD says XGBoost; the report can show the comparison.
+          c) Adopt the 14-day hotfix window? +0.008 to +0.020 and 27% more
+             risky examples, but it changes the label definition. Cheap to
+             adopt (label.py HOTFIX_WINDOW_DAYS = 14).
+          d) Repo-relative size features: help XGBoost only. Shipping them
+             needs a per-repo reference distribution at serving time
+             (extra GitHub calls for any new repo). Not worth it for the
+             baseline.
+          e) Fix 5 (reverts only) cannot be tested without a separate
+             collection targeted at reverted PRs. Not recommended in the
+             remaining weeks.
+          f) Fix 4 (more repos) is judged on the full 16-repo run; going to
+             25 repos means several more hours of collection.
+
+[ ] D0s. STEP 13 SMOKE TEST (2026-09-14, 1,800 PRs from 6 repos; trained on
+        sentry-python, netbox, mypy; held out aiohttp, moto, sqlfluff).
+        NOT FINAL — only 3 training repos and 49 training positives.
+                         baseline   XGBoost
+          accuracy         0.739     0.816   (all-safe would score 0.948)
+          precision        0.127     0.106
+          recall           0.681     0.340
+          ROC-AUC          0.786     0.631
+          PR-AUC           0.204     0.095   (random 0.052)
+          leave-repos-out CV ROC-AUC: baseline 0.628 ± 0.070,
+                                      XGBoost  0.602 ± 0.084
+        - XGBoost did NOT beat the baseline here. With this few positives
+          and noisy labels a linear model generalises better than trees.
+          Re-judge on the full run before concluding.
+        - The single hold-out ROC-AUC (0.786) is much higher than the CV mean
+          (0.628): this particular hold-out set happens to be easier. Report
+          the CV mean as the headline number, the hold-out as one sample.
+        - Early stopping picked only 9 of 300 trees. The validation set was 1
+          repo (mypy, 11 risky PRs) — too small to steer early stopping. On
+          the full run validation becomes ~3 repos. If it still stops very
+          early, choose the tree count by cross-validation across training
+          repos instead of a single validation carve.
+        - author_pr_count decision (D0j/D0o), better evidence now (47 test
+          positives): baseline 0.786 -> 0.775 without it, XGBoost 0.631 ->
+          0.586. Dropping it costs little for the baseline and removes the
+          training-serving skew and label-bias problems. Still recommended.
+        - Implementation choices in train.py: validation repos are carved from
+          TRAINING repos only (never test); after early stopping the final
+          model is refit on all training repos with exactly the chosen tree
+          count, so model.json needs no best_iteration handling in Step 14.
+          metrics.json also stores training-set feature_means for Step 15.
+          train.py refuses to save artifacts when --drop is used, because the
+          saved feature order would not match features.FEATURE_ORDER.
+        - Reload check passed: model.json reloaded gives the same held-out
+          ROC-AUC as metrics.json (0.631), 9 trees.
+
+[ ] D0r. !! LABEL RATE DEPENDS ON REPO CULTURE, NOT ONLY RISK (Step 10 impact,
+        found in Step 12). Per-repo risky rates: sentry-python 8.7%, netbox
+        4.0%, mypy 3.7%, sqlfluff 1.7%, moto 0.3%. Overall rate fell to 3.7%
+        with 5 repos — BELOW the Step 10 gate's 5% floor.
+        Why moto is so low:
+          - only 9% of its commit subjects contain a fix word
+            ("EC2: fix bad test assertion" style is rarer than sentry's
+            "fix(scope): ..."), versus 21-25% for sentry and mypy;
+          - 97 distinct authors in its 300 PRs, 67 of them with a single PR,
+            so the same-author hotfix rule can rarely fire.
+        Consequence: the label means something different in each repo, so a
+        model trained on some repos transfers poorly to others. This is a
+        likely reason cross-repo ROC-AUC is near 0.5.
+        Options to discuss with the mentor before Step 13:
+          a) accept, and report per-repo results plus this limitation;
+          b) also evaluate WITHIN repos (time-based split per repo) to show
+             whether the features carry signal when the label definition is
+             consistent — keep the cross-repo split as the headline;
+          c) drop repos whose labels barely fire (e.g. <2% risky) and say so.
+        Re-check all of this on the full 16-repo run (B3/B4/B5).
+
+[ ] D0j. !! author_pr_count TRAINING-SERVING SKEW RISK (Step 09 vs Step 17).
+        Serving (repo_sync.count_prior_merged_prs, per the Step 17 plan)
+        counts only PRs stored locally — the latest 30 synced per repo — so
+        live values will be small. Training (Step 09) would count from ~2
+        years of collected PRs, so training values will be much larger.
+        Same feature, different data source = the model is miscalibrated
+        on this feature in production.
+        Fix before Step 13 — pick ONE source for both:
+          a) GitHub search API, 1 call per PR:
+             q=repo:OWNER/NAME is:pr is:merged author:LOGIN merged:<CREATED_AT
+             and use total_count — works identically in training and serving
+          b) or drop author_pr_count from FEATURE_ORDER.
+
+[ ] D1. Remove the Step 08 debug route. It lives in TWO places, both marked
+        "# TODO: remove before deployment":
+          - main.py: GET /debug/features/{repo_id}/{pr_number}
+          - services/debug_features.py (delete the whole file)
+        Also drop "debug_features" from the services import in main.py.
+        Keep repo_sync.get_repository and repo_sync.count_prior_merged_prs —
+        Step 17 reuses them.
+        Scheduled for Step 18.
+
+[ ] D2. Pin requirements.txt with `pip freeze`.
+        Step 25, right before deploying. Unpinned is fine until then.
+
+[ ] D3. Alembic migrations.
+        Deferred to Week 8 by LLD v2 §2 on purpose — the schema churns hardest
+        in Weeks 3-5 and there is no data to protect yet. Using
+        create_all() until then.
+
+[ ] D4. Authentication (JWT, /auth/register, /auth/login, hashed_password).
+        Deferred entirely — not in the PRD Must-Have list. Single-user mode
+        via DEFAULT_USER_EMAIL. Upgrade path is in LLD v2 §2 if time allows
+        in Weeks 9-10.
+
+[ ] D5. Update LLD.md to match whatever the code actually became.
+        Step 26.
+
+================================================================
+E. PROJECT ADMIN — not code
+================================================================
+
+[ ] E1. PRD page 7 responsibilities table is blank. Nine work items have no
+        names assigned, and signatures/date are unsigned. Needed for the
+        mentor checkpoint.
+
+[ ] E2. Decide with Shravani who owns which of the nine tasks.
+
+================================================================
+F. STRETCH GOALS — Weeks 9-10 only, if time allows
+================================================================
+
+[ ] F1. Step 27 — SHAP feature importance + ContributionBars component.
+[ ] F2. Step 28 — Batch scan of all open PRs, ranked by risk.
+[ ] F3. Model comparison view (LogReg vs XGBoost side by side).
+[ ] F4. Risk trend charts per repository over time.
+[ ] F5. Confidence calibration display.
+
+================================================================
+NOTES
+================================================================
+- Docker binary is installed on this machine but the daemon is not running.
+- Python venv lives at backend/venv/ (gitignored). All 13 deps installed.
+- backend/.env exists with PLACEHOLDER values so the app boots; it is
+  gitignored and contains no real credentials.
