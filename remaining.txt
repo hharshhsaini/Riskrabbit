@@ -1,6 +1,6 @@
 REMAINING — Predictive Deployment Risk Assessment System
 Running list of everything deferred. Nothing here is forgotten; it is parked.
-Last updated: 2026-09-14, FULL-DATA RESULTS IN (fixed labels); artifacts ready to commit
+Last updated: 2026-09-14, Step 15 (services/explain.py) done; D0u resolved
 
 ================================================================
 A. BLOCKED ON YOU — needed before the next steps can run
@@ -141,6 +141,37 @@ B. OPEN GATES — steps done in code but not yet fully verified
         ml/data/rerun_after_backport_fix.txt. DO NOT COMMIT the 11:58 artifacts.
         NOTE: 3.5% is now BELOW the Step 10 gate's 5% floor.
 
+[x] B9. Step 15 gate DONE (2026-09-14). 126 tests pass.
+        [x] Live Groq call on the obviously-risky PR (score 0.366, Medium):
+            "...changes 50 files and adds 1,980 lines, both well above the
+            averages of 5.7 files and 347 lines added... moderately elevated".
+            Every number quoted matches the prompt; ~0.9 s.
+        [x] Deliberately invalid API key -> deterministic fallback in 233 ms, no
+            exception; the warning logs Groq's 401 message, never the key (unit
+            test checks the configured key is absent from logs).
+        Differences from the Step 15 prompt, and why:
+          - Training means are READ from metrics.json at import, not pasted
+            into explain.py. A pasted copy would silently go stale after the
+            next retrain. Import fails loudly if the means are missing.
+          - "Largest deviation" = |value - mean| / mean, so large counts like
+            lines_added do not always outrank yes/no features. metrics.json
+            has no standard deviations, so a z-score was not possible.
+          - New setting LLM_REASONING_EFFORT (default "low", in config.py and
+            .env.example). Required for gpt-oss (A3: without it the reply is
+            empty); leave empty for models that reject the parameter.
+          - Explicit 20-second timeout and 1 retry. The openai client default
+            is a 600-second timeout, which would hang a prediction.
+          - Empty or truncated replies (finish_reason not "stop") also use the
+            fallback, not only API errors.
+          - The OpenAI client is created on first use inside the try, so a bad
+            configuration becomes a fallback rather than an import error.
+        FOR STEP 16 (faithfulness check):
+          - The safe-PR reply named 4 measurements; the prompt asks for 2-3.
+          - author_pr_count can appear as an explanation driver although it is
+            the label-biased feature (D0o). If it is kept in FEATURE_ORDER,
+            consider leaving it out of explanations.
+        Committed 2026-09-14 together with Step 14 (see C4).
+
 [ ] B8. Step 14 gate — HALF DONE.
         [x] Fake feature in FEATURE_ORDER -> services.model import fails
             loudly (verified: RuntimeError naming 'fake_feature').
@@ -235,9 +266,16 @@ C. GIT — nothing committed or pushed yet
         feature_order.json, metrics.json), the label.py backport fix and its
         tests, docs/model-ceiling.md with final numbers, and this file.
         Credential scan on those files was clean before committing.
-        NOT committed yet: Step 14 (backend/services/model.py,
-        backend/tests/test_model.py).
+        Step 14 was committed separately afterwards (C4).
         To publish:  git push
+
+[x] C4. DONE 2026-09-14 — third commit, on main (local only, NOT pushed):
+        Steps 14-15 — services/model.py, services/explain.py,
+        tests/test_model.py, tests/test_explain.py, config.py
+        (LLM_REASONING_EFFORT), .env.example, and this file. 126 tests passed and
+        the credential scan was clean before committing (its one match was the
+        user:password@host placeholder in .env.example).
+        To publish all unpushed commits:  git push
 
 [ ] C2. Decide commit cadence: one commit per playbook step is recommended
         so the history reads as the build log for the report.
@@ -449,7 +487,21 @@ D. SCHEDULED FOR LATER STEPS — do not do these early
           opposite coefficients. Expected with few positives; do not
           interpret coefficient signs in the report until the full run.
 
-[ ] D0u. !! RISK LABEL THRESHOLDS DO NOT FIT THE MODEL'S SCORES (Step 14).
+[x] D0u. RESOLVED 2026-09-14 — keep the fixed thresholds (< 0.34 Low,
+        < 0.67 Medium, else High). The "94% Medium, 0% High" problem was
+        specific to the 9-tree Step 13 scratch model. On the final model:
+          all PRs:  Low 47.8% (0.1% actually risky) | Medium 48.5% (4.7%) |
+                    High 3.7% (32.7%)
+          held-out: Low 49.9% (0.4%) | Medium 49.2% (5.0%) | High 0.9% (25.0%,
+                    only 2 of 8 PRs)
+        The percentile alternative (Low = bottom 50%, High = top 10% of
+        training scores) did WORSE on held-out repos: High 7.1% of PRs but only
+        7.8% actually risky, barely above Medium's 5.2%.
+        Caveat for the report: on repositories the model never saw, "High" is
+        rare (8 of 900 PRs), and the "all PRs" figures include training repos,
+        so they are optimistic. Still describe the score as a relative risk
+        ranking, not a probability of failure.
+[ ] D0u (old text, superseded). !! RISK LABEL THRESHOLDS DO NOT FIT THE MODEL'S SCORES (Step 14).
         Fixed thresholds < 0.34 Low, < 0.67 Medium, else High assume calibrated
         probabilities. The model's scores are not: XGBoost's scale_pos_weight
         (~18) pulls every score towards the middle. On the Step 13 scratch model,

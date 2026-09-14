@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     OPENAI_BASE_URL: str | None = None
     LLM_MODEL: str = "openai/gpt-oss-20b"
+    # For reasoning models (gpt-oss, o-series). Leave empty for models that reject it.
+    LLM_REASONING_EFFORT: str | None = "low"
     MODEL_PATH: str = "ml/model.json"
     DEFAULT_USER_EMAIL: str = "dev@example.com"
     ENV: str = "development"
