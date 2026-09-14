@@ -1,6 +1,6 @@
 REMAINING — Predictive Deployment Risk Assessment System
 Running list of everything deferred. Nothing here is forgotten; it is parked.
-Last updated: 2026-09-14, code for Steps 02-13b committed (branch, not pushed); collection still running
+Last updated: 2026-09-14, FULL-DATA RESULTS IN (fixed labels); artifacts ready to commit
 
 ================================================================
 A. BLOCKED ON YOU — needed before the next steps can run
@@ -75,9 +75,9 @@ B. OPEN GATES — steps done in code but not yet fully verified
         [x] An hour without crashing — confirmed 2026-09-14 01:40: running
             since 00:39:56, 0 errors, 0 rate-limit sleeps, 1,211 PRs and
             7,623 commits written, 4 of 16 repos complete.
-        [ ] Final count in the 3,000-5,000 range (expected ~4,700 PRs).
-            A background job re-labels automatically when the collector
-            exits (see B3).
+        [x] Final count in range — collection finished 2026-09-14 11:56:
+            4,594 PRs from all 16 repos, 27,126 commits. Clean exit, "DONE".
+            (starlette has only 176 eligible PRs and typer 218, not 300.)
         Expected runtime: roughly 5 hours. About 14k API calls for PRs plus
         ~9k for commit file lists, against 5,000/hour; the script sleeps
         through rate limits on its own.
@@ -92,7 +92,12 @@ B. OPEN GATES — steps done in code but not yet fully verified
         encode/starlette now redirects to Kludex/starlette; the list uses the
         new name.
 
-[ ] B3. Step 10 gate — FINAL RE-RUN NEEDED after collection finishes.
+[x] B3. Step 10 gate DONE on the full data (with the D0v backport fix):
+        163 of 4,594 = 3.5% risky — BELOW the 5% floor, not broken. 20 examples
+        hand-checked: ~4-5 of 10 risky labels are genuine follow-up fixes or
+        reverts; negatives look genuinely uneventful. Accepted as a documented
+        limitation (docs/model-ceiling.md).
+[ ] B3 (old text). Step 10 gate — FINAL RE-RUN NEEDED after collection finishes.
         Current result covers only the 3 repos fully collected so far
         (mypy, sentry-python, netbox; 900 PRs): 49 risky = 5.4%, inside the
         5-15% gate. A background job re-runs ml.label automatically when the
@@ -100,20 +105,90 @@ B. OPEN GATES — steps done in code but not yet fully verified
           ./venv/bin/python -m ml.label --inspect 20
         and hand-check the 20 examples again across all 16 repos.
 
-[ ] B4. Step 11 gate — FINAL RE-RUN NEEDED after final labels. A background
+[x] B4. Step 11 gate DONE on full data: PASS, 9 features separate the classes.
+        Strongest: author_pr_count 0.687 (label-biased), lines_added 0.625,
+        total_churn 0.623, files_changed 0.620, unique_dirs_touched 0.607,
+        lines_removed 0.602, pr_age_hours 0.399 (LOWER when risky: median 3.4h
+        risky vs 17.5h safe). review_comment_count fell to 0.529 on full data.
+        Top 5 authors hold 54.6% of positives. Summary: ml/data/rerun_after_backport_fix.txt
+[ ] B4 (old text). Step 11 gate — FINAL RE-RUN NEEDED after final labels. A background
         job runs ml.audit automatically once label_summary.txt is written and
         saves ml/data/audit_summary.txt. Partial result (900 PRs, 3 repos):
         PASS, 8 features separate the classes. Re-check the per-repo and
         per-author sections on all 16 repos.
 
-[ ] B7. Step 13b gate — FINAL NUMBERS NEEDED after the full run. A background
+[ ] D0v. !! LABEL BUG FOUND AND FIXED 2026-09-14 (full-data B3 inspection):
+        BACKPORTS AND CHERRY-PICKS OF A PR COUNTED AS HOTFIXES FOR THAT SAME PR.
+        Example: aiohttp#11290 was labelled risky only because of
+        "[PR #11290/16703bb9 backport][3.13] Fix file uploads ..." — a copy of
+        #11290 onto a release branch, which "cites" #11290. Same for pylint's
+        "[Backport maintenance/4.0.x] ..." commits.
+        Fix in ml/label.py: ignore hotfix evidence that is a backport
+        ("backport" in the subject), a cherry-pick ("cherry picked from
+        commit" in the body), or whose subject repeats the PR's own title.
+        3 new tests. 355 copy commits now ignored.
+        Impact on the full 16-repo labels:
+          risky PRs 211 (4.6%) -> 163 (3.5%)
+          aio-libs/aiohttp 41 -> 15, pylint-dev/pylint 24 -> 2, others unchanged
+        tox-dev/tox stays at 40 (13.3%): that is NOT this bug. One maintainer
+        (gaborbernat) wrote 174 of tox's 300 sampled PRs and 39 of its 40 risky
+        ones, iterating fast on "fix(config)" changes. Same-author label bias
+        (D0o), now the largest single source of positives.
+        Everything the automatic chain produced at 11:58 (labeled_prs.jsonl,
+        dataset.csv, audit_summary.txt, train_summary.txt, backend/ml/model.json,
+        feature_order.json, metrics.json, experiments_summary.txt) used the
+        BUGGY labels — superseded. A re-run with the fix was started; its log is
+        ml/data/rerun_after_backport_fix.txt. DO NOT COMMIT the 11:58 artifacts.
+        NOTE: 3.5% is now BELOW the Step 10 gate's 5% floor.
+
+[ ] B8. Step 14 gate — HALF DONE.
+        [x] Fake feature in FEATURE_ORDER -> services.model import fails
+            loudly (verified: RuntimeError naming 'fake_feature').
+        [x] predict() latency 0.47 ms per call (target < 100 ms). Import takes
+            ~0.9 s once, at startup.
+        [x] tests/test_model.py::test_trained_model_scores_obviously_risky_above_obviously_safe
+            PASSES on the fixed-label full-data model (110 tests pass).
+            is SKIPPED until backend/ml/model.json exists. After the final
+            ml.train run:  cd backend && ./venv/bin/pytest tests/test_model.py -rs
+            WARNING: on the Step 13 scratch model (9 trees, 6 repos) this test
+            would FAIL — risky 0.442 vs safe 0.453. It DID FAIL on the 11:58
+            full-data model (buggy labels, D0v): risky 0.184 vs safe 0.301.
+            Re-run after the fixed-label retrain. The data does not support
+            parts of the "obvious" intuition: in the Step 11 audit has_tests was
+            slightly HIGHER for risky PRs, touches_config slightly LOWER, and
+            is_weekend showed no signal. If it still fails on the final model,
+            that is a finding to report, not a reason to hand-tune the model.
+        [ ] "App fails loudly at startup" is only true once main.py imports
+            services.model. Nothing imports it yet — Step 17 (pipeline.py) must
+            import it at module level so a bad model stops uvicorn from starting.
+
+[x] B7. Step 13b gate DONE via option 2: no configuration clears 0.75 in
+        leave-repos-out CV. Best pooled 0.663 (14-day window + repo percentiles,
+        XGBoost), +0.023 over current rules. 7 -> 16 repos did not raise the
+        ceiling (0.644 -> 0.640). Reverts only: 13 positives, ~random.
+        docs/model-ceiling.md rewritten with final numbers (preliminary banner
+        removed). Summary: ml/data/experiments_summary.txt
+[ ] B7 (old text). Step 13b gate — FINAL NUMBERS NEEDED after the full run. A background
         job runs ml.experiments (with and without author_pr_count) after the
         final training and saves ml/data/experiments_summary.txt. Then update
         the tables in docs/model-ceiling.md from it and remove its
         "preliminary" banner. Gate option 2 (written ceiling paragraph) is
         drafted in that file.
 
-[ ] B6. Step 13 gate + COMMIT — the same background job (B5) now also trains
+[~] B6. Step 13 results (fixed labels, 13 training repos, 137 risky):
+                     held-out   CV mean ± std
+          baseline     0.734    0.667 ± 0.060
+          XGBoost      0.795    0.650 ± 0.068
+        Gate "XGBoost beats baseline": YES on the held-out split, NO in CV.
+        Gate "ROC-AUC >= 0.75": only on the single held-out split (26 risky
+        PRs); CV says ~0.65. Treated as NOT met -> Step 13b (B7).
+        Early stopping chose 29 trees, but validation PR-AUC 0.028 ~ random
+        0.026: tree count effectively arbitrary.
+        Held-out variants: baseline + log1p counts 0.803; without
+        author_pr_count baseline 0.679, XGBoost 0.764.
+        backend/ml/model.json, feature_order.json, metrics.json are now the
+        FIXED-label artifacts — commit them together with the label.py fix.
+[ ] B6 (old text). Step 13 gate + COMMIT — the same background job (B5) now also trains
         XGBoost and writes the REAL artifacts to backend/ml/: model.json,
         feature_order.json, metrics.json (plus ml/data/train_summary.txt).
         Then:
@@ -131,7 +206,9 @@ B. OPEN GATES — steps done in code but not yet fully verified
         backend/ml/*.json files do not exist yet. They are not gitignored
         (checked); ml/data/ is.
 
-[ ] B5. Step 12 gate — REAL RUN NEEDED after final audit. A background job
+[x] B5. Step 12 DONE: baseline on held-out aiohttp/pytest/wagtail (900 PRs,
+        26 risky): ROC-AUC 0.734, PR-AUC 0.066 (random 0.029). CV 0.667 ± 0.060.
+[ ] B5 (old text). Step 12 gate — REAL RUN NEEDED after final audit. A background job
         runs ml.train automatically once audit_summary.txt is complete and
         saves ml/data/train_summary.txt, using the default held-out repos
         pytest-dev/pytest, wagtail/wagtail, aio-libs/aiohttp. Write the
@@ -149,10 +226,18 @@ C. GIT — nothing committed or pushed yet
         NOT in this commit: backend/ml/model.json, feature_order.json,
         metrics.json — they are written after collection finishes (B6) and
         need their own commit.
-        To merge into main and push when ready:
-          git checkout main
-          git merge steps-02-13-backend-ml-pipeline
-          git push -u origin main
+        UPDATE: Harsh merged it into main and pushed — origin/main is at the
+        Steps 02-13b commit (fb4b6f9). The branch can be deleted:
+          git branch -d steps-02-13-backend-ml-pipeline
+
+[x] C3. DONE 2026-09-14 — second commit, on main (local only, NOT pushed):
+        the fixed-label model artifacts (backend/ml/model.json,
+        feature_order.json, metrics.json), the label.py backport fix and its
+        tests, docs/model-ceiling.md with final numbers, and this file.
+        Credential scan on those files was clean before committing.
+        NOT committed yet: Step 14 (backend/services/model.py,
+        backend/tests/test_model.py).
+        To publish:  git push
 
 [ ] C2. Decide commit cadence: one commit per playbook step is recommended
         so the history reads as the build log for the report.
@@ -363,6 +448,30 @@ D. SCHEDULED FOR LATER STEPS — do not do these early
         - Collinear pair: test_file_ratio (-0.96) and has_tests (+0.80) have
           opposite coefficients. Expected with few positives; do not
           interpret coefficient signs in the report until the full run.
+
+[ ] D0u. !! RISK LABEL THRESHOLDS DO NOT FIT THE MODEL'S SCORES (Step 14).
+        Fixed thresholds < 0.34 Low, < 0.67 Medium, else High assume calibrated
+        probabilities. The model's scores are not: XGBoost's scale_pos_weight
+        (~18) pulls every score towards the middle. On the Step 13 scratch model,
+        over 1,800 labelled PRs:
+          scores 0.31 to 0.64 (median 0.43)
+          Low     99 PRs ( 5.5%)  actually risky 0.0%
+          Medium 1701 PRs (94.5%) actually risky 5.6%
+          High     0 PRs ( 0.0%)
+        The dashboard would call almost every PR "Medium" and never "High".
+        Re-check on the final model; expect the same shape.
+        Options (decide before Step 15/21, which show the label):
+          a) RECOMMENDED: thresholds from the training-score distribution,
+             e.g. Low = bottom 50% of scores, High = top 10%, saved in
+             metrics.json by ml/train.py and read by services/model.py. Honest:
+             "High" then means "riskier than 90% of PRs in the training data".
+          b) Calibrate probabilities (Platt or isotonic) on the validation
+             repos, keep fixed thresholds. Needs more positives than we have
+             to calibrate reliably.
+          c) Keep the fixed thresholds as the Step 14 prompt specified, and
+             accept a nearly all-Medium dashboard.
+        The 0-1 score itself should also be described as a relative risk
+        score, not a probability of failure.
 
 [ ] D0t. STEP 13b RESULT (2026-09-14, 2,100 PRs from 7 repos) — no fix clears
         0.75; gains are under +0.03. Write-up: docs/model-ceiling.md.

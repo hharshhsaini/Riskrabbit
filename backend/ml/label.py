@@ -16,6 +16,9 @@ A PR is risky when a public signal suggests the change went wrong after merging:
       - it touches more than 20 files (a repo-wide sweep such as a lint fix);
       - its PR number is lower than this PR's, i.e. it was opened before this
         PR existed and so cannot be fixing it;
+      - it is a backport or cherry-pick (a copy of a change onto a release
+        branch, e.g. "[PR #123 backport][3.12] ..."), or its subject repeats this
+        PR's own title — copies of a change are not fixes for it;
       - it is by someone other than this PR's author AND neither cites this PR
         (#N) nor calls itself a regression fix. Hand-checking 8 examples of each
         kind: same-author follow-up fixes were mostly real hotfixes (~6 of 8),
@@ -59,6 +62,9 @@ MIN_TRUNCATED_TITLE_PREFIX = 20
 
 HOTFIX_SUBJECT = re.compile(r"\b(fix|hotfix|bug|regression)\b", re.IGNORECASE)
 REGRESSION_SUBJECT = re.compile(r"\bregression\b", re.IGNORECASE)
+BACKPORT_SUBJECT = re.compile(r"\bback-?port", re.IGNORECASE)
+CHERRY_PICK_TRAILER = re.compile(r"cherry[ -]?picked from commit", re.IGNORECASE)
+LEADING_BRACKETS = re.compile(r"^(\s*\[[^\]]*\]\s*)+")
 # The optional trailing "(#N)" is the revert PR's own number in squash merges:
 #   Revert "Add cache layer (#12)" (#15)
 REVERT_SUBJECT = re.compile(r'^Revert "(?P<title>.*)"(?:\s*\(#\d+\))?\s*$')
@@ -178,6 +184,9 @@ def label_repository(
                 continue
             if not pr_paths & files:
                 continue
+            if _is_copy_of_a_change(commit, subject, pr):
+                stats["backport_or_copy_of_a_change"] += 1
+                continue
             fix_number = _pr_number_in_subject(subject)
             if fix_number is not None and fix_number <= pr["number"]:
                 stats["fix_opened_before_this_pr"] += 1
@@ -272,6 +281,20 @@ def _pr_paths(record: dict[str, Any]) -> set[str]:
             if file.get(key):
                 paths.add(file[key])
     return paths
+
+
+def _is_copy_of_a_change(commit: dict[str, Any], subject: str, pr: dict[str, Any]) -> bool:
+    if BACKPORT_SUBJECT.search(subject) or CHERRY_PICK_TRAILER.search(commit.get("message") or ""):
+        return True
+    return bool(pr.get("title")) and _core_title(subject) == _core_title(pr["title"])
+
+
+def _core_title(text: str) -> str:
+    """A title without "[backport]" prefixes or trailing "(#123)" PR numbers."""
+    text = LEADING_BRACKETS.sub("", text)
+    while TRAILING_PR_NUMBER.search(text):
+        text = TRAILING_PR_NUMBER.sub("", text)
+    return " ".join(text.casefold().split()).rstrip(".")
 
 
 def _links_to_pr(commit: dict[str, Any], subject: str, pr: dict[str, Any]) -> list[str]:
@@ -408,6 +431,7 @@ def _print_summary(
     print(f"  fix PR opened before this PR (cannot be its fix):   {totals['fix_opened_before_this_pr']}")
     print(f"  fix touches >{MAX_FIX_COMMIT_FILES} files (repo-wide sweep):          {totals['fix_touching_over_20_files']}")
     print(f"  overlap only in tests/docs/changelog/hub files:     {totals['overlap_only_in_tests_docs_changelog_or_hub_files']}")
+    print(f"  backport, cherry-pick or copy of a change:          {totals['backport_or_copy_of_a_change']}")
     print(f"  fix by another author with no link to this PR:      {totals['fix_by_other_author_without_link']}")
 
     if total == 0:

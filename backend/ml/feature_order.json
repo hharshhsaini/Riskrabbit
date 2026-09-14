@@ -1,0 +1,18 @@
+[
+  "files_changed",
+  "lines_added",
+  "lines_removed",
+  "total_churn",
+  "unique_dirs_touched",
+  "commit_count",
+  "avg_commit_msg_len",
+  "has_tests",
+  "test_file_ratio",
+  "touches_config",
+  "touches_ci",
+  "review_comment_count",
+  "pr_age_hours",
+  "is_weekend",
+  "is_off_hours",
+  "author_pr_count"
+]

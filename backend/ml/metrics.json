@@ -1,0 +1,280 @@
+{
+  "model_version": "xgb-v1",
+  "trained_at": "2026-09-14T06:30:01Z",
+  "rows": 4594,
+  "positive_rate": 0.03548106225511537,
+  "repositories": [
+    "Kludex/starlette",
+    "aio-libs/aiohttp",
+    "beetbox/beets",
+    "fastapi/typer",
+    "getmoto/moto",
+    "getsentry/sentry-python",
+    "netbox-community/netbox",
+    "pylint-dev/pylint",
+    "pypa/pip",
+    "pytest-dev/pytest",
+    "python/mypy",
+    "sphinx-doc/sphinx",
+    "sqlfluff/sqlfluff",
+    "streamlink/streamlink",
+    "tox-dev/tox",
+    "wagtail/wagtail"
+  ],
+  "held_out_repositories": [
+    "aio-libs/aiohttp",
+    "pytest-dev/pytest",
+    "wagtail/wagtail"
+  ],
+  "train": {
+    "rows": 3694,
+    "positives": 137,
+    "positive_rate": 0.037087168381158636,
+    "repositories": [
+      "Kludex/starlette",
+      "beetbox/beets",
+      "fastapi/typer",
+      "getmoto/moto",
+      "getsentry/sentry-python",
+      "netbox-community/netbox",
+      "pylint-dev/pylint",
+      "pypa/pip",
+      "python/mypy",
+      "sphinx-doc/sphinx",
+      "sqlfluff/sqlfluff",
+      "streamlink/streamlink",
+      "tox-dev/tox"
+    ]
+  },
+  "test": {
+    "rows": 900,
+    "positives": 26,
+    "positive_rate": 0.028888888888888888,
+    "repositories": [
+      "aio-libs/aiohttp",
+      "pytest-dev/pytest",
+      "wagtail/wagtail"
+    ]
+  },
+  "collection_window": {
+    "created_at": "2026-09-13T19:09:56Z",
+    "since": "2024-09-13T19:09:56Z",
+    "until": "2026-08-30T19:09:56Z",
+    "window_days": 730,
+    "label_maturity_days": 14
+  },
+  "features": [
+    "files_changed",
+    "lines_added",
+    "lines_removed",
+    "total_churn",
+    "unique_dirs_touched",
+    "commit_count",
+    "avg_commit_msg_len",
+    "has_tests",
+    "test_file_ratio",
+    "touches_config",
+    "touches_ci",
+    "review_comment_count",
+    "pr_age_hours",
+    "is_weekend",
+    "is_off_hours",
+    "author_pr_count"
+  ],
+  "feature_means": {
+    "files_changed": 5.746616134271792,
+    "lines_added": 346.5292365998917,
+    "lines_removed": 156.80996210070384,
+    "total_churn": 503.33919870059555,
+    "unique_dirs_touched": 2.4775311315646995,
+    "commit_count": 3.7853275582024906,
+    "avg_commit_msg_len": 121.38142350232357,
+    "has_tests": 0.4556036816459123,
+    "test_file_ratio": 0.19980435179958472,
+    "touches_config": 0.18002165674066054,
+    "touches_ci": 0.08310774228478614,
+    "review_comment_count": 1.787222523010287,
+    "pr_age_hours": 243.92650732418934,
+    "is_weekend": 0.26448294531672983,
+    "is_off_hours": 0.5138061721710883,
+    "author_pr_count": 32.82782891174878
+  },
+  "decision_threshold": 0.5,
+  "xgboost": {
+    "hyperparameters": {
+      "max_depth": 4,
+      "n_estimators": 29,
+      "learning_rate": 0.05,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "scale_pos_weight": 25.963503649635037,
+      "random_state": 42
+    },
+    "early_stopping": {
+      "validation_repositories": [
+        "Kludex/starlette",
+        "beetbox/beets",
+        "sqlfluff/sqlfluff"
+      ],
+      "best_n_estimators": 29,
+      "validation_pr_auc": 0.02806366681542267,
+      "patience_rounds": 30,
+      "max_estimators": 300
+    },
+    "held_out": {
+      "accuracy": 0.7655555555555555,
+      "precision": 0.06976744186046512,
+      "recall": 0.5769230769230769,
+      "roc_auc": 0.7954585460306285,
+      "pr_auc": 0.11922524263083804,
+      "confusion_matrix": [
+        [
+          674,
+          200
+        ],
+        [
+          11,
+          15
+        ]
+      ]
+    },
+    "cross_validation": {
+      "folds": [
+        {
+          "repos": [
+            "getsentry/sentry-python",
+            "python/mypy",
+            "wagtail/wagtail"
+          ],
+          "rows": 900,
+          "positives": 44,
+          "roc_auc": 0.584696261682243
+        },
+        {
+          "repos": [
+            "getmoto/moto",
+            "pytest-dev/pytest",
+            "tox-dev/tox"
+          ],
+          "rows": 900,
+          "positives": 45,
+          "roc_auc": 0.7366211825860949
+        },
+        {
+          "repos": [
+            "beetbox/beets",
+            "pypa/pip",
+            "streamlink/streamlink"
+          ],
+          "rows": 900,
+          "positives": 32,
+          "roc_auc": 0.6559979838709677
+        },
+        {
+          "repos": [
+            "aio-libs/aiohttp",
+            "pylint-dev/pylint",
+            "sqlfluff/sqlfluff"
+          ],
+          "rows": 900,
+          "positives": 22,
+          "roc_auc": 0.7105767239594118
+        },
+        {
+          "repos": [
+            "Kludex/starlette",
+            "fastapi/typer",
+            "netbox-community/netbox",
+            "sphinx-doc/sphinx"
+          ],
+          "rows": 994,
+          "positives": 20,
+          "roc_auc": 0.5622433264887063
+        }
+      ],
+      "min_positives_per_fold": 5,
+      "roc_auc_mean": 0.6500270957174847,
+      "roc_auc_std": 0.06808017755843047,
+      "trusted_folds": 5
+    }
+  },
+  "baseline": {
+    "model": "StandardScaler + LogisticRegression(class_weight='balanced', max_iter=1000)",
+    "held_out": {
+      "accuracy": 0.6577777777777778,
+      "precision": 0.05660377358490566,
+      "recall": 0.6923076923076923,
+      "roc_auc": 0.7344217567329695,
+      "pr_auc": 0.06558474942505968,
+      "confusion_matrix": [
+        [
+          574,
+          300
+        ],
+        [
+          8,
+          18
+        ]
+      ]
+    },
+    "cross_validation": {
+      "folds": [
+        {
+          "repos": [
+            "getsentry/sentry-python",
+            "python/mypy",
+            "wagtail/wagtail"
+          ],
+          "rows": 900,
+          "positives": 44,
+          "roc_auc": 0.5812446898895497
+        },
+        {
+          "repos": [
+            "getmoto/moto",
+            "pytest-dev/pytest",
+            "tox-dev/tox"
+          ],
+          "rows": 900,
+          "positives": 45,
+          "roc_auc": 0.7132943469785575
+        },
+        {
+          "repos": [
+            "beetbox/beets",
+            "pypa/pip",
+            "streamlink/streamlink"
+          ],
+          "rows": 900,
+          "positives": 32,
+          "roc_auc": 0.6972926267281105
+        },
+        {
+          "repos": [
+            "aio-libs/aiohttp",
+            "pylint-dev/pylint",
+            "sqlfluff/sqlfluff"
+          ],
+          "rows": 900,
+          "positives": 22,
+          "roc_auc": 0.7337958169393249
+        },
+        {
+          "repos": [
+            "Kludex/starlette",
+            "fastapi/typer",
+            "netbox-community/netbox",
+            "sphinx-doc/sphinx"
+          ],
+          "rows": 994,
+          "positives": 20,
+          "roc_auc": 0.6099075975359343
+        }
+      ],
+      "min_positives_per_fold": 5,
+      "roc_auc_mean": 0.6671070156142954,
+      "roc_auc_std": 0.06022615598957212,
+      "trusted_folds": 5
+    }
+  }
+}

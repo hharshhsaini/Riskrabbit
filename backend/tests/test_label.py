@@ -338,3 +338,34 @@ def test_signals_can_be_restricted_to_reverts_only():
 
     assert result[12]["label_reason"] == "reverted"
     assert result[13]["is_risky"] == 0
+
+
+def test_backport_of_this_pr_is_not_its_hotfix():
+    pr = pr_record(12, title="Fix file uploads failing on redirects")
+    backport = commit("a" * 40, "[PR #12/16703bb9 backport][3.13] Fix file uploads failing on redirects (#20)", MERGED + timedelta(hours=1), files=["src/cache.py"])
+
+    labeled, stats = label_repository([pr], [backport])
+
+    assert labeled[0]["is_risky"] == 0
+    assert stats["backport_or_copy_of_a_change"] == 1
+
+
+def test_cherry_pick_and_repeated_title_are_copies_not_fixes():
+    pr = pr_record(12, title="Fix sendfile over-reading")
+    commits = [
+        commit("a" * 40, "Fix cache crash (#20)\n\n(cherry picked from commit abc1234)", MERGED + timedelta(days=1), files=["src/cache.py"]),
+        commit("b" * 40, "Fix sendfile over-reading (#12) (#21)", MERGED + timedelta(days=1), files=["src/cache.py"]),
+        commit("c" * 40, "[Backport maintenance/4.0.x] Fix other crash (#22)", MERGED + timedelta(days=1), files=["src/cache.py"]),
+    ]
+
+    labeled, stats = label_repository([pr], commits)
+
+    assert labeled[0]["is_risky"] == 0
+    assert stats["backport_or_copy_of_a_change"] == 3
+
+
+def test_genuine_follow_up_fix_still_counts_after_copy_filter():
+    pr = pr_record(12, title="Refactor WebSocket reader")
+    follow_up = commit("a" * 40, "Fix WebSocket reader with fragmented messages (#20)", MERGED + timedelta(days=1), files=["src/cache.py"])
+
+    assert labels([pr], [follow_up])[12]["label_reason"] == "hotfix"

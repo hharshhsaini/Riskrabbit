@@ -1,93 +1,109 @@
 # Why the model stops near ROC-AUC 0.65 — Step 13b write-up
 
-> **Status: preliminary.** Numbers below come from 2,100 PRs in the 7 repositories
-> fully collected on 2026-09-14. `backend/ml/data/experiments_summary.txt` is
-> regenerated automatically on the full 16-repository dataset; update the tables
-> from it before this goes into the report.
+Final numbers: 4,594 merged PRs from 16 public repositories, collected
+2026-09-14, labelled with the rules in `backend/ml/label.py`. Reproduce with, from
+`backend/`: `python -m ml.label`, `python -m ml.audit`, `python -m ml.train`,
+`python -m ml.experiments`.
 
 ## Result
 
-No configuration reached the PRD target of ROC-AUC 0.75. The best model is the
-logistic-regression baseline, not XGBoost.
+**The honest headline is ROC-AUC ≈ 0.65**, measured with leave-repositories-out
+cross-validation: every repository is scored by a model that never saw any of its
+PRs. No configuration reached the PRD target of 0.75 under that test.
 
-All scores use **leave-repositories-out cross-validation**: every repository is
-scored by a model that never saw any of its PRs. "Pooled" ranks all
-out-of-fold predictions together, so every risky PR counts.
+| Evaluation | Baseline (logistic regression) | XGBoost |
+|---|---|---|
+| 5-fold leave-repos-out CV, mean ± std | **0.667 ± 0.060** | 0.650 ± 0.068 |
+| Pooled over all out-of-fold predictions | 0.640 | 0.624 |
+| Fixed held-out repos (aiohttp, pytest, wagtail) | 0.734 | 0.795 |
+| PR-AUC on the fixed held-out repos (random = 0.029) | 0.066 | 0.119 |
 
-| Configuration | Risky PRs | Baseline ROC-AUC | XGBoost ROC-AUC | Best PR-AUC (random) |
-|---|---|---|---|---|
-| Current rules, 7-day hotfix window | 101 (4.8%) | **0.644** | 0.533 | 0.116 (0.048) |
-| Fix 1: 14-day hotfix window | 128 (6.1%) | **0.652** | 0.539 | 0.136 (0.061) |
-| Fix 3: size features as within-repo percentiles | 101 (4.8%) | 0.635 | 0.567 | 0.114 (0.048) |
-| Fixes 1 + 3 | 128 (6.1%) | 0.649 | 0.574 | 0.142 (0.061) |
-| Fix 5: reverts only | 5 (0.2%) | too few to score | — | — |
+The fixed held-out split scores much higher than cross-validation. It contains
+only **26 risky PRs**, so one split can land well above or below the true
+average; the five CV folds (20–45 risky PRs each) range from 0.56 to 0.74. The
+0.795 is reported, but it is not used to claim the target.
 
-Without `author_pr_count` (recommended, see below) the baseline scores
-0.588 / 0.608 / 0.589 / 0.619 for the same four rows.
+On the held-out split, XGBoost's top-ranked PRs are risky about **4× more often
+than a random pick** (PR-AUC 0.119 vs 0.029).
 
-The playbook's five fixes, in order:
+## The playbook's five fixes
 
-1. **Widen the hotfix window to 14 days** — +0.008. More risky PRs (101 → 128),
-   no real gain in ranking.
-2. **Drop Signal C** — already done; bug-issue data was never collected, so the
-   signal most likely to point the wrong way was never used.
-3. **Repository-relative size features** — helps XGBoost (+0.03 to +0.05),
-   neutral for the baseline. Raw PR size does partly encode repository size, but
-   removing that is not the bottleneck.
-4. **More repositories** — pending the full 16-repository run (≈4,700 PRs, roughly
-   twice the risky examples). The effect of 2× data on the fixes above has been
-   small, so a jump to 0.75 is not expected.
-5. **Reverts only** — only 5 reverted PRs in 2,100. Reverts are rare (~1% of
-   merges) and the PR sample was spread evenly over two years rather than
-   targeted at reverted PRs, so this label cannot be trained on without a
-   separate, targeted collection.
+Pooled leave-repos-out ROC-AUC, all 16 features. `*` = changes the label, i.e.
+what counts as risky, not only the model.
+
+| Configuration | Risky PRs | Baseline | XGBoost |
+|---|---|---|---|
+| Current rules, 7-day hotfix window | 163 (3.5%) | **0.640** | 0.624 |
+| Fix 1: 14-day hotfix window `*` | 220 (4.8%) | 0.635 | 0.660 |
+| Fix 3: size as within-repo percentile | 163 (3.5%) | 0.638 | 0.633 |
+| Fixes 1 + 3 `*` | 220 (4.8%) | 0.649 | **0.663** |
+| Fix 5: reverts only `*` | 13 (0.3%) | 0.523 | 0.530 |
+
+Without `author_pr_count` the same rows score 0.618 / 0.600, 0.608 / 0.634,
+0.628 / 0.625, 0.637 / 0.621.
+
+1. **14-day hotfix window** — 35% more risky PRs (163 → 220) but no better
+   ranking for the baseline; +0.04 for XGBoost.
+2. **Drop Signal C** — already done; bug-issue data was never collected.
+3. **Repository-relative size** — no meaningful change (±0.01). Raw size is not
+   what holds the model back.
+4. **More repositories** — going from 7 to 16 repositories (2,100 → 4,594 PRs)
+   did not raise the ceiling: 0.644 → 0.640 for the baseline.
+5. **Reverts only** — just 13 reverted PRs in 4,594 (0.3%). Unlearnable: the
+   scores are close to random.
+
+Best of all: **0.663** (fixes 1 + 3, XGBoost), +0.023 over the current rules.
 
 ## Why there is a ceiling
 
-The label is a proxy. A PR is marked risky when public history suggests a
-follow-up fix or a revert. Reading labelled examples by hand showed that only
-about **35–50% of "risky" labels are real deployment problems**; the rest are
-planned follow-up work that happens to look like a hotfix (for example, one
-author landing a series of related fixes minutes apart).
+The label is a proxy. A PR is marked risky when public history shows a revert, or
+a follow-up fix by the same author touching the same source files within 7 days.
+Reading labelled examples by hand showed that only about **45–50% of risky labels
+are real deployment problems**. The rest are planned follow-up work that looks like
+a hotfix — for example one maintainer landing a string of related fixes in quick
+succession.
 
-That noise sets a hard limit on the score, independent of the model. Suppose a
-fraction *p* of the risky labels are real and the rest behave like ordinary PRs.
-Even a perfect model — one that ranks every truly risky PR above every safe one —
-can only score:
+That noise caps the score regardless of the model. If a fraction *p* of risky
+labels are real and the rest behave like ordinary PRs, then even a perfect model —
+one that ranks every truly risky PR first — can only reach:
 
 > **ROC-AUC ≤ p × 1.0 + (1 − p) × 0.5 = 0.5 + p / 2**
 
-because it ranks the real risky PRs correctly (AUC 1.0) and the mislabelled ones
-no better than chance (AUC 0.5). With *p* between 0.35 and 0.50 the ceiling is
-**about 0.68–0.75**, before counting the risky PRs that were never labelled at
-all (reverts of PRs outside the sample, fixes by other people with no link to the
-PR, incidents that never reached git history), which lower it further.
+It ranks the real risky PRs correctly (AUC 1.0) and the mislabelled ones at chance
+(AUC 0.5). With *p* ≈ 0.45–0.50 the ceiling is **about 0.72–0.75**, before
+counting risky PRs that were never labelled at all (reverts of PRs outside the
+sample, incidents that never reached git history), which lower it further.
 
-The observed **0.65** sits just below that ceiling. The model is not failing to
-learn available signal; the proxy labels do not contain much more.
+The observed **0.65** sits below that ceiling. Getting higher needs better labels
+— real incident data such as deployment rollbacks or error-tracker spikes linked to
+releases — which this project deliberately does not use.
 
-## What this means
+## Labelling bug found and fixed on the full dataset
 
-- The honest headline is **ROC-AUC ≈ 0.65 with leave-repositories-out
-  validation**, and **PR-AUC about 2.4× the random baseline** (0.116 vs 0.048):
-  the model's top-ranked PRs are risky more than twice as often as a random pick.
-- A random train/test split was deliberately avoided. It would let the model
-  learn repository quirks (for example, one repository's commit-message style)
-  and report a much higher, meaningless number.
-- XGBoost underperforms the linear baseline because there are only ~100–230
-  risky examples and the labels are noisy; trees overfit the noise.
-- Reaching 0.75 needs better labels, not a better model: real incident data
-  (deployment rollbacks, error-tracker spikes linked to releases) — exactly what
-  this project deliberately excludes by using only public data.
+Inspecting labels across all 16 repositories showed that **backports and
+cherry-picks of a PR were counted as hotfixes for that same PR**. For example,
+aiohttp#11290 was marked risky only because of
+`[PR #11290/16703bb9 backport][3.13] Fix file uploads…`, a copy of the change onto
+a release branch. Ignoring backports, cherry-picks and commits repeating the PR's
+own title removed 355 copied commits and cut risky PRs from 211 to 163
+(aiohttp 41 → 15, pylint 24 → 2). All numbers in this document use the fixed labels.
 
-## Checks behind these numbers
+## Limitations to state in the report
 
-- The strongest feature, `review_comment_count`, was checked for leakage: only 2%
-  of review comments were posted after merge, and scores were identical with them
-  removed (0.679 vs 0.679 on a 40-PR sample).
-- `author_pr_count` adds about +0.05 but is biased by the labelling rule (the five
-  authors with most risky PRs hold 73.5% of all positives) and is computed
-  differently in training and in the live API. Recommended: drop it and report
-  the lower, cleaner number.
-- Label rates vary by repository culture (0.3% to 8.7%) because commit-message
-  conventions differ, which also limits cross-repository transfer.
+- **Label precision ~45–50%** (hand-checked). Every metric is measured against
+  these noisy labels.
+- **Positive rate 3.5%**, below the playbook's 5% guideline, and it varies from
+  0.3% to 13.3% by repository because commit-message conventions and team
+  structure differ. That limits how well a model transfers between repositories.
+- **Author bias.** The same-author hotfix rule gives prolific maintainers more
+  risky labels: the five authors with most risky PRs hold 54.6% of all positives,
+  and one tox maintainer alone accounts for 39. `author_pr_count` is the strongest
+  single feature (0.687) largely for that reason; it is recommended to drop it and
+  report the lower, cleaner score.
+- **Quickly merged PRs look riskier.** Median time open is 3.4 hours for risky
+  PRs versus 17.5 for safe ones. This may be real (less review) or partly the same
+  author bias (maintainers merge their own PRs fast).
+- **XGBoost's tree count is not reliable.** Early stopping chose 29 trees, but its
+  validation PR-AUC (0.028) was no better than random (0.026).
+- **No leakage from review comments.** Only 2% of review comments were posted after
+  merge, and a 40-PR check scored the same with them removed (0.679 vs 0.679).
